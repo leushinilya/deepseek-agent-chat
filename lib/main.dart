@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 
 void main() {
@@ -44,12 +45,60 @@ class DeepSeekChatApp extends StatelessWidget {
 }
 
 class ChatMessage {
-  const ChatMessage({required this.role, required this.content});
+  const ChatMessage({
+    required this.role,
+    required this.content,
+    this.responseFormat,
+  });
 
   final String role;
   final String content;
+  final ResponseFormat? responseFormat;
+
+  String get displayContent {
+    if (responseFormat != ResponseFormat.json) return content;
+    try {
+      return const JsonEncoder.withIndent('  ').convert(jsonDecode(content));
+    } on FormatException {
+      return content;
+    }
+  }
 
   Map<String, String> toJson() => {'role': role, 'content': content};
+}
+
+enum ResponseFormat { freeform, json }
+
+@immutable
+class ResponseSettings {
+  const ResponseSettings({
+    this.responseFormat = ResponseFormat.freeform,
+    this.maxTokens = 1000,
+    this.stopSequence,
+  });
+
+  final ResponseFormat responseFormat;
+  final int maxTokens;
+  final String? stopSequence;
+
+  ResponseSettings copyWith({
+    ResponseFormat? responseFormat,
+    int? maxTokens,
+    String? stopSequence,
+    bool clearStopSequence = false,
+  }) =>
+      ResponseSettings(
+        responseFormat: responseFormat ?? this.responseFormat,
+        maxTokens: maxTokens ?? this.maxTokens,
+        stopSequence:
+            clearStopSequence ? null : stopSequence ?? this.stopSequence,
+      );
+
+  Map<String, Object?> toJson() => {
+        'responseFormat': responseFormat.name,
+        'maxTokens': maxTokens,
+        'stopSequence': stopSequence,
+      };
 }
 
 class ChatPage extends StatefulWidget {
@@ -66,14 +115,17 @@ class _ChatPageState extends State<ChatPage> {
   );
   final _messages = <ChatMessage>[];
   final _inputController = TextEditingController();
+  final _stopSequenceController = TextEditingController();
   final _inputFocusNode = FocusNode();
   final _scrollController = ScrollController();
   bool _isLoading = false;
   String? _error;
+  ResponseSettings _settings = const ResponseSettings();
 
   @override
   void dispose() {
     _inputController.dispose();
+    _stopSequenceController.dispose();
     _inputFocusNode.dispose();
     _scrollController.dispose();
     super.dispose();
@@ -82,6 +134,7 @@ class _ChatPageState extends State<ChatPage> {
   Future<void> _sendMessage() async {
     final content = _inputController.text.trim();
     if (content.isEmpty || _isLoading) return;
+    final requestSettings = _settings;
 
     setState(() {
       _messages.add(ChatMessage(role: 'user', content: content));
@@ -98,6 +151,7 @@ class _ChatPageState extends State<ChatPage> {
             headers: {'Content-Type': 'application/json'},
             body: jsonEncode({
               'messages': _messages.map((message) => message.toJson()).toList(),
+              'settings': requestSettings.toJson(),
             }),
           )
           .timeout(const Duration(seconds: 60));
@@ -106,7 +160,13 @@ class _ChatPageState extends State<ChatPage> {
       if (response.statusCode >= 200 && response.statusCode < 300) {
         final answer = _decodeAnswer(response.body);
         setState(
-          () => _messages.add(ChatMessage(role: 'assistant', content: answer)),
+          () => _messages.add(
+            ChatMessage(
+              role: 'assistant',
+              content: answer,
+              responseFormat: requestSettings.responseFormat,
+            ),
+          ),
         );
       } else {
         setState(() => _error = _decodeError(response.body));
@@ -162,55 +222,278 @@ class _ChatPageState extends State<ChatPage> {
     });
   }
 
+  void _updateFormat(ResponseFormat format) {
+    setState(() => _settings = _settings.copyWith(responseFormat: format));
+  }
+
+  void _updateMaxTokens(double value) {
+    setState(() => _settings = _settings.copyWith(maxTokens: value.round()));
+  }
+
+  void _updateStopSequence(String value) {
+    final normalized = value.trim();
+    setState(
+      () => _settings = normalized.isEmpty
+          ? _settings.copyWith(clearStopSequence: true)
+          : _settings.copyWith(stopSequence: normalized),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       body: SafeArea(
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 980),
-            child: Column(
-              children: [
-                const _Header(),
-                Expanded(
-                  child: _MessageList(
-                    messages: _messages,
-                    scrollController: _scrollController,
-                    isLoading: _isLoading,
-                  ),
-                ),
-                if (_error != null) _ErrorBanner(message: _error!),
-                _Composer(
-                  controller: _inputController,
-                  focusNode: _inputFocusNode,
-                  isLoading: _isLoading,
-                  onSend: _sendMessage,
-                ),
-              ],
-            ),
-          ),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final isDesktop = constraints.maxWidth >= 760;
+            final settingsPanel = _SettingsPanel(
+              settings: _settings,
+              stopSequenceController: _stopSequenceController,
+              onFormatChanged: _updateFormat,
+              onMaxTokensChanged: _updateMaxTokens,
+              onStopSequenceChanged: _updateStopSequence,
+              compact: !isDesktop,
+            );
+            final chat = _ChatArea(
+              messages: _messages,
+              scrollController: _scrollController,
+              isLoading: _isLoading,
+              error: _error,
+              inputController: _inputController,
+              inputFocusNode: _inputFocusNode,
+              onSend: _sendMessage,
+            );
+
+            return Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 1280),
+                child: isDesktop
+                    ? Row(
+                        children: [
+                          SizedBox(width: 300, child: settingsPanel),
+                          const VerticalDivider(width: 1),
+                          Expanded(child: chat),
+                        ],
+                      )
+                    : Column(
+                        children: [
+                          settingsPanel,
+                          const Divider(height: 1),
+                          Expanded(child: chat),
+                        ],
+                      ),
+              ),
+            );
+          },
         ),
       ),
     );
   }
 }
 
+class _ChatArea extends StatelessWidget {
+  const _ChatArea({
+    required this.messages,
+    required this.scrollController,
+    required this.isLoading,
+    required this.error,
+    required this.inputController,
+    required this.inputFocusNode,
+    required this.onSend,
+  });
+
+  final List<ChatMessage> messages;
+  final ScrollController scrollController;
+  final bool isLoading;
+  final String? error;
+  final TextEditingController inputController;
+  final FocusNode inputFocusNode;
+  final VoidCallback onSend;
+
+  @override
+  Widget build(BuildContext context) => Column(
+        children: [
+          const _Header(),
+          Expanded(
+            child: _MessageList(
+              messages: messages,
+              scrollController: scrollController,
+              isLoading: isLoading,
+            ),
+          ),
+          if (error != null) _ErrorBanner(message: error!),
+          _Composer(
+            controller: inputController,
+            focusNode: inputFocusNode,
+            isLoading: isLoading,
+            onSend: onSend,
+          ),
+        ],
+      );
+}
+
+class _SettingsPanel extends StatelessWidget {
+  const _SettingsPanel({
+    required this.settings,
+    required this.stopSequenceController,
+    required this.onFormatChanged,
+    required this.onMaxTokensChanged,
+    required this.onStopSequenceChanged,
+    required this.compact,
+  });
+
+  final ResponseSettings settings;
+  final TextEditingController stopSequenceController;
+  final ValueChanged<ResponseFormat> onFormatChanged;
+  final ValueChanged<double> onMaxTokensChanged;
+  final ValueChanged<String> onStopSequenceChanged;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    final fields = _SettingsFields(
+      settings: settings,
+      stopSequenceController: stopSequenceController,
+      onFormatChanged: onFormatChanged,
+      onMaxTokensChanged: onMaxTokensChanged,
+      onStopSequenceChanged: onStopSequenceChanged,
+    );
+
+    if (compact) {
+      return Material(
+        color: Colors.white,
+        child: ExpansionTile(
+          leading: const Icon(Icons.tune_rounded),
+          title: const Text(
+            'Параметры ответа',
+            style: TextStyle(fontWeight: FontWeight.w600),
+          ),
+          tilePadding: const EdgeInsets.symmetric(horizontal: 16),
+          childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          children: [fields],
+        ),
+      );
+    }
+
+    return ColoredBox(
+      color: Colors.white,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 22, 20, 20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Row(
+              children: [
+                Icon(Icons.tune_rounded, size: 21, color: Color(0xFF2563EB)),
+                SizedBox(width: 9),
+                Text(
+                  'Параметры ответа',
+                  style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700),
+                ),
+              ],
+            ),
+            const SizedBox(height: 26),
+            fields,
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SettingsFields extends StatelessWidget {
+  const _SettingsFields({
+    required this.settings,
+    required this.stopSequenceController,
+    required this.onFormatChanged,
+    required this.onMaxTokensChanged,
+    required this.onStopSequenceChanged,
+  });
+
+  final ResponseSettings settings;
+  final TextEditingController stopSequenceController;
+  final ValueChanged<ResponseFormat> onFormatChanged;
+  final ValueChanged<double> onMaxTokensChanged;
+  final ValueChanged<String> onStopSequenceChanged;
+
+  @override
+  Widget build(BuildContext context) => Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text('Формат ответа',
+              style: TextStyle(fontWeight: FontWeight.w600)),
+          const SizedBox(height: 9),
+          SegmentedButton<ResponseFormat>(
+            segments: const [
+              ButtonSegment(
+                value: ResponseFormat.freeform,
+                label: Text('Свободный'),
+              ),
+              ButtonSegment(value: ResponseFormat.json, label: Text('JSON')),
+            ],
+            selected: {settings.responseFormat},
+            showSelectedIcon: false,
+            onSelectionChanged: (selection) => onFormatChanged(selection.first),
+          ),
+          const SizedBox(height: 24),
+          const Text(
+            'Максимальная длина ответа',
+            style: TextStyle(fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 4),
+          Align(
+            alignment: Alignment.centerRight,
+            child: Text(
+              '${settings.maxTokens} токенов',
+              style: const TextStyle(color: Color(0xFF64748B), fontSize: 13),
+            ),
+          ),
+          Slider(
+            value: settings.maxTokens.toDouble(),
+            min: 50,
+            max: 4000,
+            divisions: 79,
+            label: settings.maxTokens.toString(),
+            onChanged: onMaxTokensChanged,
+          ),
+          const SizedBox(height: 12),
+          const Text('Стоп слово',
+              style: TextStyle(fontWeight: FontWeight.w600)),
+          const SizedBox(height: 9),
+          TextField(
+            controller: stopSequenceController,
+            maxLength: 100,
+            maxLines: 2,
+            inputFormatters: [LengthLimitingTextInputFormatter(100)],
+            onChanged: onStopSequenceChanged,
+            decoration: const InputDecoration(
+              hintText: 'Не задано',
+              counterText: '',
+              isDense: true,
+              contentPadding:
+                  EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+            ),
+          ),
+        ],
+      );
+}
+
 class _Header extends StatelessWidget {
   const _Header();
   @override
   Widget build(BuildContext context) => const Padding(
-    padding: EdgeInsets.fromLTRB(20, 18, 20, 14),
-    child: Row(
-      children: [
-        Icon(Icons.auto_awesome_rounded, color: Color(0xFF2563EB)),
-        SizedBox(width: 10),
-        Text(
-          'DeepSeek Agent',
-          style: TextStyle(fontSize: 19, fontWeight: FontWeight.w700),
+        padding: EdgeInsets.fromLTRB(20, 18, 20, 14),
+        child: Row(
+          children: [
+            Icon(Icons.auto_awesome_rounded, color: Color(0xFF2563EB)),
+            SizedBox(width: 10),
+            Text(
+              'DeepSeek Agent',
+              style: TextStyle(fontSize: 19, fontWeight: FontWeight.w700),
+            ),
+          ],
         ),
-      ],
-    ),
-  );
+      );
 }
 
 class _MessageList extends StatelessWidget {
@@ -266,6 +549,20 @@ class _MessageList extends StatelessWidget {
 class _MessageBubble extends StatelessWidget {
   const _MessageBubble({required this.message});
   final ChatMessage message;
+
+  Future<void> _copyMessage(BuildContext context) async {
+    await Clipboard.setData(ClipboardData(text: message.displayContent));
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        const SnackBar(
+          content: Text('Текст скопирован'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+  }
+
   @override
   Widget build(BuildContext context) {
     final isUser = message.role == 'user';
@@ -280,12 +577,32 @@ class _MessageBubble extends StatelessWidget {
           borderRadius: BorderRadius.circular(12),
           border: isUser ? null : Border.all(color: const Color(0xFFE2E8F0)),
         ),
-        child: Text(
-          message.content,
-          style: TextStyle(
-            height: 1.4,
-            color: isUser ? Colors.white : const Color(0xFF1E293B),
-          ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: SelectionArea(
+                child: Text(
+                  message.displayContent,
+                  style: TextStyle(
+                    height: 1.4,
+                    color: isUser ? Colors.white : const Color(0xFF1E293B),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            IconButton(
+              onPressed: () => _copyMessage(context),
+              tooltip: 'Копировать сообщение',
+              visualDensity: VisualDensity.compact,
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints.tightFor(width: 32, height: 32),
+              iconSize: 18,
+              color: isUser ? Colors.white70 : const Color(0xFF64748B),
+              icon: const Icon(Icons.copy_rounded),
+            ),
+          ],
         ),
       ),
     );
@@ -296,16 +613,16 @@ class _TypingIndicator extends StatelessWidget {
   const _TypingIndicator();
   @override
   Widget build(BuildContext context) => const Align(
-    alignment: Alignment.centerLeft,
-    child: Padding(
-      padding: EdgeInsets.only(top: 10),
-      child: SizedBox(
-        width: 24,
-        height: 24,
-        child: CircularProgressIndicator(strokeWidth: 2.5),
-      ),
-    ),
-  );
+        alignment: Alignment.centerLeft,
+        child: Padding(
+          padding: EdgeInsets.only(top: 10),
+          child: SizedBox(
+            width: 24,
+            height: 24,
+            child: CircularProgressIndicator(strokeWidth: 2.5),
+          ),
+        ),
+      );
 }
 
 class _ErrorBanner extends StatelessWidget {
@@ -313,15 +630,15 @@ class _ErrorBanner extends StatelessWidget {
   final String message;
   @override
   Widget build(BuildContext context) => Container(
-    width: double.infinity,
-    margin: const EdgeInsets.symmetric(horizontal: 16),
-    padding: const EdgeInsets.all(12),
-    decoration: BoxDecoration(
-      color: const Color(0xFFFEF2F2),
-      borderRadius: BorderRadius.circular(8),
-    ),
-    child: Text(message, style: const TextStyle(color: Color(0xFFB91C1C))),
-  );
+        width: double.infinity,
+        margin: const EdgeInsets.symmetric(horizontal: 16),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: const Color(0xFFFEF2F2),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Text(message, style: const TextStyle(color: Color(0xFFB91C1C))),
+      );
 }
 
 class _Composer extends StatelessWidget {
@@ -337,35 +654,35 @@ class _Composer extends StatelessWidget {
   final VoidCallback onSend;
   @override
   Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.fromLTRB(16, 10, 16, 18),
-    child: Row(
-      crossAxisAlignment: CrossAxisAlignment.end,
-      children: [
-        Expanded(
-          child: TextField(
-            controller: controller,
-            focusNode: focusNode,
-            enabled: !isLoading,
-            minLines: 1,
-            maxLines: 5,
-            textInputAction: TextInputAction.send,
-            onSubmitted: (_) => onSend(),
-            decoration: const InputDecoration(
-              hintText: 'Напишите сообщение...',
-              contentPadding: EdgeInsets.symmetric(
-                horizontal: 16,
-                vertical: 13,
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 18),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            Expanded(
+              child: TextField(
+                controller: controller,
+                focusNode: focusNode,
+                enabled: !isLoading,
+                minLines: 1,
+                maxLines: 5,
+                textInputAction: TextInputAction.send,
+                onSubmitted: (_) => onSend(),
+                decoration: const InputDecoration(
+                  hintText: 'Напишите сообщение...',
+                  contentPadding: EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 13,
+                  ),
+                ),
               ),
             ),
-          ),
+            const SizedBox(width: 10),
+            IconButton.filled(
+              onPressed: isLoading ? null : onSend,
+              tooltip: 'Отправить',
+              icon: const Icon(Icons.arrow_upward_rounded),
+            ),
+          ],
         ),
-        const SizedBox(width: 10),
-        IconButton.filled(
-          onPressed: isLoading ? null : onSend,
-          tooltip: 'Отправить',
-          icon: const Icon(Icons.arrow_upward_rounded),
-        ),
-      ],
-    ),
-  );
+      );
 }

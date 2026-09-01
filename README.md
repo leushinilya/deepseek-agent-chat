@@ -75,3 +75,24 @@ DEEPSEEK_MODEL=deepseek-v4-flash
 - `.env` исключен из Git и не попадает в Flutter Web bundle.
 - CORS включается лишь при заданном `FRONTEND_ORIGIN`, что предназначено для локальной разработки.
 - Proxy ограничивает размер JSON-запроса, количество сообщений и длину каждого сообщения.
+
+## API чата
+
+`POST /api/chat` принимает историю и параметры следующего ответа:
+
+```json
+{
+  "messages": [{"role": "user", "content": "Привет"}],
+  "settings": {
+    "responseFormat": "freeform",
+    "maxTokens": 1000,
+    "stopSequence": null
+  }
+}
+```
+
+- `responseFormat`: `freeform` или `json`;
+- `maxTokens`: целое число от 50 до 4000;
+- `stopSequence`: строка длиной до 100 символов или `null`.
+
+Поле `settings` можно не передавать: backend применит значения из примера выше. Ключ API остается только в `backend/.env`.
