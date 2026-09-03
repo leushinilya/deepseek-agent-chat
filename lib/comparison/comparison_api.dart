@@ -6,15 +6,17 @@ import 'package:http/http.dart' as http;
 import 'models.dart';
 
 abstract interface class ComparisonGateway {
-  Future<String> fetchDirect(String query);
-  Future<ExplainedResult> fetchExplained(String query);
-  Future<PromptedResult> fetchPrompted(String query);
-  Future<List<RoleAnswer>> fetchRoles(String query, List<String> roles);
+  Future<String> fetchAnswer(String query, double temperature);
+  Future<ComparisonEvaluation> evaluate(
+    String query,
+    Map<ComparisonVariant, String> answers,
+  );
   void close();
 }
 
 class ComparisonApiException implements Exception {
   const ComparisonApiException(this.message);
+
   final String message;
 }
 
@@ -22,81 +24,100 @@ class ComparisonApiClient implements ComparisonGateway {
   ComparisonApiClient({http.Client? client, String? baseUrl})
       : _client = client ?? http.Client(),
         _baseUrl = baseUrl ??
-            const String.fromEnvironment('API_BASE_URL',
-                defaultValue: 'http://localhost:3000');
+            const String.fromEnvironment(
+              'API_BASE_URL',
+              defaultValue: 'http://localhost:3000',
+            );
 
   final http.Client _client;
   final String _baseUrl;
 
   @override
-  Future<String> fetchDirect(String query) async {
-    final data = await _request('direct', query);
-    return _requiredString(data, 'answer');
-  }
-
-  @override
-  Future<ExplainedResult> fetchExplained(String query) async {
-    final data = await _request('explained', query);
-    return ExplainedResult(
-        answer: _requiredString(data, 'answer'),
-        reasoningSummary: _requiredString(data, 'reasoningSummary'));
-  }
-
-  @override
-  Future<PromptedResult> fetchPrompted(String query) async {
-    final data = await _request('prompted', query);
-    return PromptedResult(
-        generatedPrompt: _requiredString(data, 'generatedPrompt'),
-        answer: _requiredString(data, 'answer'));
-  }
-
-  @override
-  Future<List<RoleAnswer>> fetchRoles(String query, List<String> roles) async {
-    final data = await _request('roles', query, roles: roles);
-    final rawAnswers = data['answers'];
-    if (rawAnswers is! List) {
-      throw const ComparisonApiException(
-          'Сервер вернул некорректный список ответов.');
+  Future<String> fetchAnswer(String query, double temperature) async {
+    final payload = await _post('/api/compare', {
+      'query': query,
+      'temperature': temperature,
+    });
+    final answer = payload['answer'];
+    if (answer is! String || answer.trim().isEmpty) {
+      throw const ComparisonApiException('Сервер вернул некорректный ответ.');
     }
-    return rawAnswers.map((item) {
-      if (item is! Map<String, dynamic>) {
-        throw const ComparisonApiException(
-            'Сервер вернул некорректный ответ роли.');
-      }
-      return RoleAnswer(
-          role: _requiredString(item, 'role'),
-          answer: _requiredString(item, 'answer'));
-    }).toList();
+    return answer.trim();
   }
 
-  Future<Map<String, dynamic>> _request(String scenario, String query,
-      {List<String>? roles}) async {
+  @override
+  Future<ComparisonEvaluation> evaluate(
+    String query,
+    Map<ComparisonVariant, String> answers,
+  ) async {
+    final groups = <Map<String, Object>>[];
+    for (final temperature in [0.0, 0.7, 1.2]) {
+      groups.add({
+        'temperature': temperature,
+        'answers': [
+          for (final variant in ComparisonVariant.values)
+            if (variant.temperature == temperature) answers[variant]!,
+        ],
+      });
+    }
+    final payload = await _post('/api/evaluate', {
+      'query': query,
+      'groups': groups,
+    });
+    final rawItems = payload['evaluations'];
+    if (rawItems is! List || rawItems.length != 3) {
+      throw const ComparisonApiException('Сервер вернул некорректную оценку.');
+    }
+    try {
+      return ComparisonEvaluation(
+        items: rawItems.map((raw) {
+          final item = raw as Map<String, dynamic>;
+          return TemperatureEvaluation(
+            temperature: (item['temperature'] as num).toDouble(),
+            accuracy: item['accuracy'] as int,
+            creativity: item['creativity'] as int,
+            diversity: item['diversity'] as int,
+            summary: (item['summary'] as String).trim(),
+          );
+        }).toList(),
+      );
+    } catch (_) {
+      throw const ComparisonApiException('Сервер вернул некорректную оценку.');
+    }
+  }
+
+  Future<Map<String, dynamic>> _post(
+    String path,
+    Map<String, Object> body,
+  ) async {
     try {
       final response = await _client
           .post(
-            Uri.parse('$_baseUrl/api/compare/$scenario'),
+            Uri.parse('$_baseUrl$path'),
             headers: {'Content-Type': 'application/json'},
-            body:
-                jsonEncode({'query': query, if (roles != null) 'roles': roles}),
+            body: jsonEncode(body),
           )
           .timeout(const Duration(seconds: 90));
       final payload = _decodeObject(response.body);
       if (response.statusCode < 200 || response.statusCode >= 300) {
         final message = payload['error'];
         throw ComparisonApiException(
-            message is String ? message : 'Не удалось получить ответ.');
+          message is String ? message : 'Не удалось получить ответ.',
+        );
       }
       return payload;
     } on TimeoutException {
       throw const ComparisonApiException(
-          'Сервер слишком долго отвечает. Попробуйте ещё раз.');
+        'Сервер слишком долго отвечает. Попробуйте ещё раз.',
+      );
     } on ComparisonApiException {
       rethrow;
     } on FormatException {
       throw const ComparisonApiException('Сервер вернул некорректный ответ.');
     } catch (_) {
       throw const ComparisonApiException(
-          'Не удалось связаться с сервером. Проверьте подключение.');
+        'Не удалось связаться с сервером. Проверьте подключение.',
+      );
     }
   }
 
@@ -104,12 +125,6 @@ class ComparisonApiClient implements ComparisonGateway {
     final value = jsonDecode(body);
     if (value is! Map<String, dynamic>) throw const FormatException();
     return value;
-  }
-
-  String _requiredString(Map<String, dynamic> data, String key) {
-    final value = data[key];
-    if (value is! String || value.trim().isEmpty) throw const FormatException();
-    return value.trim();
   }
 
   @override

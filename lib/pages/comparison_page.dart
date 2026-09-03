@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -16,36 +14,33 @@ class ComparisonPage extends StatefulWidget {
 }
 
 class _ComparisonPageState extends State<ComparisonPage> {
+  static const _temperatures = [0.0, 0.7, 1.2];
+
   final _queryController = TextEditingController();
-  final _rolesController = TextEditingController();
   final _queryFocus = FocusNode();
   late final ComparisonRunner _runner =
       ComparisonRunner(() => ComparisonApiClient());
-  final _states = <ComparisonScenario, _ResultState>{
-    for (final scenario in ComparisonScenario.values)
-      scenario: const _ResultState(),
+  final _states = <ComparisonVariant, _ResultState>{
+    for (final variant in ComparisonVariant.values)
+      variant: const _ResultState(),
   };
   String? _queryError;
-  String? _rolesError;
+  _EvaluationState _evaluationState = const _EvaluationState();
 
-  bool get _isRunning => _states.values.any((state) => state.loading);
+  bool get _isRunning =>
+      _states.values.any((state) => state.loading) || _evaluationState.loading;
 
   @override
   void dispose() {
     _runner.dispose();
     _queryController.dispose();
-    _rolesController.dispose();
     _queryFocus.dispose();
     super.dispose();
   }
 
   Future<void> _runComparison() async {
     String query;
-    List<String> roles;
-    setState(() {
-      _queryError = null;
-      _rolesError = null;
-    });
+    setState(() => _queryError = null);
     try {
       query = validateQuery(_queryController.text);
     } on InputValidationException catch (error) {
@@ -53,36 +48,49 @@ class _ComparisonPageState extends State<ComparisonPage> {
       _queryFocus.requestFocus();
       return;
     }
-    try {
-      roles = parseRoles(_rolesController.text);
-    } on InputValidationException catch (error) {
-      setState(() => _rolesError = error.message);
-      return;
-    }
 
     setState(() {
-      for (final scenario in ComparisonScenario.values) {
-        _states[scenario] =
-            _states[scenario]!.copyWith(loading: true, clearError: true);
+      for (final variant in ComparisonVariant.values) {
+        _states[variant] = const _ResultState(loading: true);
       }
+      _evaluationState = const _EvaluationState(loading: true);
     });
-    await _runner.run(query: query, roles: roles, onUpdate: _applyUpdate);
+    await _runner.run(
+      query: query,
+      onUpdate: _applyUpdate,
+      onEvaluation: _applyEvaluation,
+    );
   }
 
-  void _applyUpdate(ScenarioUpdate update) {
+  void _applyEvaluation(EvaluationUpdate update) {
     if (!mounted) return;
     setState(() {
-      _states[update.scenario] = _ResultState(
-          value: update.value, error: update.error, loading: false);
+      _evaluationState = _EvaluationState(
+        value: update.value,
+        error: update.error,
+      );
     });
   }
 
-  Future<void> _copy(String value, String label) async {
+  void _applyUpdate(VariantUpdate update) {
+    if (!mounted) return;
+    setState(() {
+      _states[update.variant] = _ResultState(
+        value: update.value,
+        error: update.error,
+      );
+    });
+  }
+
+  Future<void> _copy(String value) async {
     await Clipboard.setData(ClipboardData(text: value));
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('$label скопирован'),
-        duration: const Duration(seconds: 2)));
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Ответ скопирован'),
+        duration: Duration(seconds: 2),
+      ),
+    );
   }
 
   @override
@@ -97,13 +105,15 @@ class _ComparisonPageState extends State<ComparisonPage> {
               sliver: SliverToBoxAdapter(
                 child: Center(
                   child: ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 1440),
+                    constraints: const BoxConstraints(maxWidth: 1500),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
                         _buildComposer(),
                         const SizedBox(height: 24),
                         _buildResults(),
+                        const SizedBox(height: 24),
+                        _buildEvaluation(),
                       ],
                     ),
                   ),
@@ -119,7 +129,7 @@ class _ComparisonPageState extends State<ComparisonPage> {
   Widget _buildHeader() {
     return Center(
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 1440),
+        constraints: const BoxConstraints(maxWidth: 1500),
         child: Padding(
           padding: const EdgeInsets.fromLTRB(20, 26, 20, 20),
           child: Row(
@@ -128,22 +138,26 @@ class _ComparisonPageState extends State<ComparisonPage> {
                 width: 42,
                 height: 42,
                 decoration: BoxDecoration(
-                    color: const Color(0xFF3659D9),
-                    borderRadius: BorderRadius.circular(12)),
-                child: const Icon(Icons.compare_arrows_rounded,
-                    color: Colors.white),
+                  color: const Color(0xFF3659D9),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child:
+                    const Icon(Icons.thermostat_rounded, color: Colors.white),
               ),
               const SizedBox(width: 13),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('AI · четыре подхода',
-                        style: Theme.of(context).textTheme.headlineMedium),
+                    Text(
+                      'Сравнение температур DeepSeek',
+                      style: Theme.of(context).textTheme.headlineMedium,
+                    ),
                     const SizedBox(height: 2),
                     const Text(
-                        'Один запрос — четыре независимых способа получить ответ',
-                        style: TextStyle(color: Color(0xFF667085))),
+                      'Один запрос — девять независимых вариантов ответа',
+                      style: TextStyle(color: Color(0xFF667085)),
+                    ),
                   ],
                 ),
               ),
@@ -163,13 +177,16 @@ class _ComparisonPageState extends State<ComparisonPage> {
         border: Border.all(color: const Color(0xFFE1E6EF)),
         boxShadow: const [
           BoxShadow(
-              color: Color(0x0A162033), blurRadius: 24, offset: Offset(0, 8))
+            color: Color(0x0A162033),
+            blurRadius: 24,
+            offset: Offset(0, 8),
+          ),
         ],
       ),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final wide = constraints.maxWidth >= 760;
-          final queryField = TextField(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          TextField(
             key: const Key('queryField'),
             controller: _queryController,
             focusNode: _queryFocus,
@@ -183,56 +200,30 @@ class _ComparisonPageState extends State<ComparisonPage> {
                   'Например: составь план подготовки к техническому собеседованию',
               errorText: _queryError,
             ),
-          );
-          final rolesField = TextField(
-            key: const Key('rolesField'),
-            controller: _rolesController,
-            minLines: 4,
-            maxLines: 8,
-            decoration: InputDecoration(
-              labelText: 'Роли',
-              alignLabelWithHint: true,
-              hintText: 'учёный, программист, врач',
-              helperText: 'Через запятую или с новой строки · до 10 ролей',
-              errorText: _rolesError,
-            ),
-          );
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              if (wide)
-                Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Expanded(flex: 3, child: queryField),
-                  const SizedBox(width: 16),
-                  Expanded(flex: 2, child: rolesField)
-                ])
-              else ...[
-                queryField,
-                const SizedBox(height: 16),
-                rolesField,
-              ],
-              const SizedBox(height: 16),
-              Align(
-                alignment: Alignment.centerRight,
-                child: Semantics(
-                  button: true,
-                  label: _isRunning
-                      ? 'Перезапустить сравнение и отменить текущие запросы'
-                      : 'Получить четыре ответа',
-                  child: FilledButton.icon(
-                    key: const Key('runButton'),
-                    onPressed: _runComparison,
-                    icon: Icon(_isRunning
-                        ? Icons.refresh_rounded
-                        : Icons.auto_awesome_rounded),
-                    label: Text(
-                        _isRunning ? 'Запустить заново' : 'Получить ответы'),
-                  ),
+          ),
+          const SizedBox(height: 16),
+          Align(
+            alignment: Alignment.centerRight,
+            child: Semantics(
+              button: true,
+              label: _isRunning
+                  ? 'Перезапустить сравнение и отменить текущие запросы'
+                  : 'Получить девять ответов',
+              child: FilledButton.icon(
+                key: const Key('runButton'),
+                onPressed: _runComparison,
+                icon: Icon(
+                  _isRunning
+                      ? Icons.refresh_rounded
+                      : Icons.auto_awesome_rounded,
+                ),
+                label: Text(
+                  _isRunning ? 'Запустить заново' : 'Получить ответы',
                 ),
               ),
-            ],
-          );
-        },
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -240,134 +231,330 @@ class _ComparisonPageState extends State<ComparisonPage> {
   Widget _buildResults() {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final columns = constraints.maxWidth >= 1100 ? 2 : 1;
         const gap = 18.0;
-        final width = columns == 2
-            ? (constraints.maxWidth - gap) / 2
-            : constraints.maxWidth;
-        final cards = <Widget>[
-          _ResultCard(
-            title: 'Обычный ответ',
-            subtitle: 'Прямой ответ модели без дополнительных инструкций',
-            icon: Icons.chat_bubble_outline_rounded,
-            state: _states[ComparisonScenario.direct]!,
-            childBuilder: (value) => _TextResult(
-                text: value as String, onCopy: () => _copy(value, 'Ответ')),
-          ),
-          _ResultCard(
-            title: 'Ответ с объяснением',
-            subtitle:
-                'Ответ и краткое резюме оснований — без скрытой цепочки рассуждений',
-            icon: Icons.lightbulb_outline_rounded,
-            state: _states[ComparisonScenario.explained]!,
-            childBuilder: (value) {
-              final result = value as ExplainedResult;
-              return Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    _Section(
-                        label: 'Итоговый ответ',
-                        text: result.answer,
-                        onCopy: () => _copy(result.answer, 'Ответ')),
-                    const SizedBox(height: 18),
-                    _Section(
-                        label: 'Ключевые шаги и допущения',
-                        text: result.reasoningSummary,
-                        onCopy: () =>
-                            _copy(result.reasoningSummary, 'Объяснение')),
-                  ]);
-            },
-          ),
-          _ResultCard(
-            title: 'Ответ через улучшенный промт',
-            subtitle:
-                'Сначала запрос уточняется, затем модель отвечает на улучшенную версию',
-            icon: Icons.tune_rounded,
-            state: _states[ComparisonScenario.prompted]!,
-            childBuilder: (value) {
-              final result = value as PromptedResult;
-              return Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    _Section(
-                        label: 'Сгенерированный промт',
-                        text: result.generatedPrompt,
-                        tinted: true,
-                        onCopy: () => _copy(result.generatedPrompt, 'Промт')),
-                    const SizedBox(height: 18),
-                    _Section(
-                        label: 'Итоговый ответ',
-                        text: result.answer,
-                        onCopy: () => _copy(result.answer, 'Ответ')),
-                  ]);
-            },
-          ),
-          _ResultCard(
-            title: 'Ответы по ролям',
-            subtitle:
-                'Несколько взглядов на исходный запрос в отдельных блоках',
-            icon: Icons.groups_2_outlined,
-            state: _states[ComparisonScenario.roles]!,
-            childBuilder: (value) {
-              final answers = value as List<RoleAnswer>;
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  for (var index = 0; index < answers.length; index++) ...[
-                    _Section(
-                      label: '«${answers[index].role}»',
-                      text: answers[index].answer,
-                      onCopy: () => _copy(answers[index].answer, 'Ответ роли'),
-                    ),
-                    if (index != answers.length - 1) const SizedBox(height: 14),
-                  ],
-                ],
-              );
-            },
-          ),
-        ];
-        return Wrap(spacing: gap, runSpacing: gap, children: [
-          for (final card in cards) SizedBox(width: width, child: card)
-        ]);
+        final wide = constraints.maxWidth >= 1050;
+        final columnWidth =
+            wide ? (constraints.maxWidth - gap * 2) / 3 : constraints.maxWidth;
+        return Wrap(
+          spacing: gap,
+          runSpacing: gap,
+          children: [
+            for (final temperature in _temperatures)
+              SizedBox(
+                width: columnWidth,
+                child: _TemperatureColumn(
+                  temperature: temperature,
+                  variants: ComparisonVariant.values
+                      .where((item) => item.temperature == temperature)
+                      .toList(),
+                  states: _states,
+                  onCopy: _copy,
+                ),
+              ),
+          ],
+        );
       },
+    );
+  }
+
+  Widget _buildEvaluation() {
+    return Container(
+      key: const Key('evaluationSection'),
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: const Color(0xFFE1E6EF)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              const Icon(
+                Icons.analytics_outlined,
+                color: Color(0xFF3659D9),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'Итоговая оценка',
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'Средняя оценка трёх вариантов для каждой температуры · шкала от 1 до 10',
+            style: TextStyle(color: Color(0xFF667085), height: 1.4),
+          ),
+          const SizedBox(height: 18),
+          if (_evaluationState.loading)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 26),
+              child: Column(
+                children: [
+                  LinearProgressIndicator(),
+                  SizedBox(height: 12),
+                  Text(
+                    'Дождитесь всех ответов — затем модель сравнит результаты',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: Color(0xFF667085)),
+                  ),
+                ],
+              ),
+            )
+          else if (_evaluationState.error != null)
+            _EvaluationError(message: _evaluationState.error!)
+          else if (_evaluationState.value != null)
+            LayoutBuilder(
+              builder: (context, constraints) {
+                const gap = 14.0;
+                final wide = constraints.maxWidth >= 900;
+                final width = wide
+                    ? (constraints.maxWidth - gap * 2) / 3
+                    : constraints.maxWidth;
+                return Wrap(
+                  spacing: gap,
+                  runSpacing: gap,
+                  children: [
+                    for (final item in _evaluationState.value!.items)
+                      SizedBox(
+                        width: width,
+                        child: _EvaluationCard(item: item),
+                      ),
+                  ],
+                );
+              },
+            )
+          else
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 24),
+              child: Text(
+                'Оценка появится после получения всех девяти ответов.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Color(0xFF7A8496)),
+              ),
+            ),
+        ],
+      ),
     );
   }
 }
 
 class _ResultState {
   const _ResultState({this.value, this.error, this.loading = false});
-  final Object? value;
+
+  final String? value;
   final String? error;
   final bool loading;
-
-  _ResultState copyWith({bool? loading, bool clearError = false}) =>
-      _ResultState(
-          value: value,
-          error: clearError ? null : error,
-          loading: loading ?? this.loading);
 }
 
-class _ResultCard extends StatelessWidget {
-  const _ResultCard(
-      {required this.title,
-      required this.subtitle,
-      required this.icon,
-      required this.state,
-      required this.childBuilder});
-  final String title;
-  final String subtitle;
-  final IconData icon;
-  final _ResultState state;
-  final Widget Function(Object value) childBuilder;
+class _EvaluationState {
+  const _EvaluationState({this.value, this.error, this.loading = false});
+
+  final ComparisonEvaluation? value;
+  final String? error;
+  final bool loading;
+}
+
+class _EvaluationCard extends StatelessWidget {
+  const _EvaluationCard({required this.item});
+
+  final TemperatureEvaluation item;
+
+  String get _temperatureLabel =>
+      item.temperature == 0 ? '0' : '${item.temperature}';
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      constraints: const BoxConstraints(minHeight: 320),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: const Color(0xFFE1E6EF))),
+        color: const Color(0xFFF8FAFC),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFFE3E8F0)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            'Temperature: $_temperatureLabel',
+            style: const TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w800,
+              color: Color(0xFF172033),
+            ),
+          ),
+          const SizedBox(height: 14),
+          _ScoreRow(label: 'Точность', score: item.accuracy),
+          const SizedBox(height: 9),
+          _ScoreRow(label: 'Креативность', score: item.creativity),
+          const SizedBox(height: 9),
+          _ScoreRow(label: 'Разнообразие', score: item.diversity),
+          const SizedBox(height: 14),
+          Text(
+            item.summary,
+            style: const TextStyle(
+              color: Color(0xFF475467),
+              height: 1.45,
+              fontSize: 13,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ScoreRow extends StatelessWidget {
+  const _ScoreRow({required this.label, required this.score});
+
+  final String label;
+  final int score;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Expanded(
+          child: Text(
+            label,
+            style: const TextStyle(
+              fontWeight: FontWeight.w600,
+              color: Color(0xFF344054),
+            ),
+          ),
+        ),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+          decoration: BoxDecoration(
+            color: const Color(0xFFE8EDFF),
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: Text(
+            '$score / 10',
+            style: const TextStyle(
+              fontWeight: FontWeight.w800,
+              color: Color(0xFF2949BE),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _EvaluationError extends StatelessWidget {
+  const _EvaluationError({required this.message});
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF1F0),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.error_outline_rounded, color: Color(0xFFB42318)),
+          const SizedBox(width: 9),
+          Expanded(
+            child: Text(
+              message,
+              style: const TextStyle(color: Color(0xFF912018)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TemperatureColumn extends StatelessWidget {
+  const _TemperatureColumn({
+    required this.temperature,
+    required this.variants,
+    required this.states,
+    required this.onCopy,
+  });
+
+  final double temperature;
+  final List<ComparisonVariant> variants;
+  final Map<ComparisonVariant, _ResultState> states;
+  final ValueChanged<String> onCopy;
+
+  String get _temperatureLabel => temperature == 0 ? '0' : '$temperature';
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF0F3F9),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: const Color(0xFFDCE2ED)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(4, 2, 4, 14),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.device_thermostat_rounded,
+                  color: Color(0xFF3659D9),
+                  size: 21,
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  'Temperature: $_temperatureLabel',
+                  key: Key('temperature-$_temperatureLabel'),
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
+              ],
+            ),
+          ),
+          for (var index = 0; index < variants.length; index++) ...[
+            _AnswerCard(
+              variant: variants[index],
+              state: states[variants[index]]!,
+              onCopy: onCopy,
+            ),
+            if (index != variants.length - 1) const SizedBox(height: 14),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _AnswerCard extends StatelessWidget {
+  const _AnswerCard({
+    required this.variant,
+    required this.state,
+    required this.onCopy,
+  });
+
+  final ComparisonVariant variant;
+  final _ResultState state;
+  final ValueChanged<String> onCopy;
+
+  @override
+  Widget build(BuildContext context) {
+    final title = 'Вариант ${variant.variantNumber}';
+    return Container(
+      constraints: const BoxConstraints(minHeight: 220),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(15),
+        border: Border.all(color: const Color(0xFFE1E6EF)),
+      ),
       clipBehavior: Clip.antiAlias,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -377,39 +564,38 @@ class _ResultCard extends StatelessWidget {
           else
             const SizedBox(height: 3),
           Padding(
-            padding: const EdgeInsets.fromLTRB(20, 18, 20, 12),
-            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Container(
-                  width: 38,
-                  height: 38,
-                  decoration: BoxDecoration(
-                      color: const Color(0xFFEEF2FF),
-                      borderRadius: BorderRadius.circular(10)),
-                  child: Icon(icon, color: const Color(0xFF3659D9), size: 21)),
-              const SizedBox(width: 12),
-              Expanded(
-                  child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                    Text(title, style: Theme.of(context).textTheme.titleLarge),
-                    const SizedBox(height: 4),
-                    Text(subtitle,
-                        style: const TextStyle(
-                            fontSize: 13,
-                            height: 1.35,
-                            color: Color(0xFF667085))),
-                  ])),
-            ]),
+            padding: const EdgeInsets.fromLTRB(16, 12, 8, 10),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    title,
+                    style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF344054),
+                    ),
+                  ),
+                ),
+                if (state.value != null)
+                  IconButton(
+                    onPressed: () => onCopy(state.value!),
+                    tooltip: 'Копировать $title',
+                    visualDensity: VisualDensity.compact,
+                    icon: const Icon(Icons.copy_rounded, size: 18),
+                  ),
+              ],
+            ),
           ),
           const Divider(height: 1, color: Color(0xFFE9EDF4)),
           ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: 500, minHeight: 205),
+            constraints: const BoxConstraints(minHeight: 158, maxHeight: 360),
             child: SingleChildScrollView(
-              padding: const EdgeInsets.all(20),
+              padding: const EdgeInsets.all(16),
               child: Semantics(
                 liveRegion: true,
                 label: state.loading ? '$title загружается' : title,
-                child: _body(context),
+                child: _buildBody(),
               ),
             ),
           ),
@@ -418,102 +604,73 @@ class _ResultCard extends StatelessWidget {
     );
   }
 
-  Widget _body(BuildContext context) {
+  Widget _buildBody() {
     if (state.error != null) {
-      return Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-            color: const Color(0xFFFFF1F0),
-            borderRadius: BorderRadius.circular(12)),
-        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Icon(Icons.error_outline_rounded,
-              color: Color(0xFFB42318), size: 20),
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(
+            Icons.error_outline_rounded,
+            color: Color(0xFFB42318),
+            size: 20,
+          ),
           const SizedBox(width: 9),
           Expanded(
-              child: Text(state.error!,
-                  style:
-                      const TextStyle(color: Color(0xFF912018), height: 1.4))),
-        ]),
+            child: Text(
+              state.error!,
+              style: const TextStyle(color: Color(0xFF912018), height: 1.4),
+            ),
+          ),
+        ],
       );
     }
-    if (state.value != null) return childBuilder(state.value!);
+    if (state.value != null) {
+      return SelectableText(
+        state.value!,
+        style: const TextStyle(
+          fontSize: 15,
+          height: 1.55,
+          color: Color(0xFF253047),
+        ),
+      );
+    }
     if (state.loading) {
       return const Padding(
-        padding: EdgeInsets.symmetric(vertical: 48),
+        padding: EdgeInsets.symmetric(vertical: 42),
         child: Center(
-            child: Column(mainAxisSize: MainAxisSize.min, children: [
-          SizedBox(
-              width: 30,
-              height: 30,
-              child: CircularProgressIndicator(strokeWidth: 2.5)),
-          SizedBox(height: 12),
-          Text('Формируем ответ…', style: TextStyle(color: Color(0xFF667085))),
-        ])),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(
+                width: 28,
+                height: 28,
+                child: CircularProgressIndicator(strokeWidth: 2.5),
+              ),
+              SizedBox(height: 12),
+              Text(
+                'Формируем ответ…',
+                style: TextStyle(color: Color(0xFF667085)),
+              ),
+            ],
+          ),
+        ),
       );
     }
     return const Padding(
-      padding: EdgeInsets.symmetric(vertical: 50),
+      padding: EdgeInsets.symmetric(vertical: 46),
       child: Center(
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-        Icon(Icons.notes_rounded, color: Color(0xFFABB4C5), size: 30),
-        SizedBox(height: 10),
-        Text('Здесь появится результат',
-            style: TextStyle(color: Color(0xFF7A8496))),
-      ])),
-    );
-  }
-}
-
-class _TextResult extends StatelessWidget {
-  const _TextResult({required this.text, required this.onCopy});
-  final String text;
-  final VoidCallback onCopy;
-  @override
-  Widget build(BuildContext context) =>
-      _Section(label: 'Ответ', text: text, onCopy: onCopy);
-}
-
-class _Section extends StatelessWidget {
-  const _Section(
-      {required this.label,
-      required this.text,
-      required this.onCopy,
-      this.tinted = false});
-  final String label;
-  final String text;
-  final VoidCallback onCopy;
-  final bool tinted;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-          color: tinted ? const Color(0xFFF4F6FF) : const Color(0xFFF8FAFC),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-              color:
-                  tinted ? const Color(0xFFDDE3FF) : const Color(0xFFE8ECF2))),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        Row(children: [
-          Expanded(
-              child: Text(label,
-                  style: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w700,
-                      color: Color(0xFF344054)))),
-          IconButton(
-              onPressed: onCopy,
-              tooltip: 'Копировать: $label',
-              visualDensity: VisualDensity.compact,
-              icon: const Icon(Icons.copy_rounded, size: 18)),
-        ]),
-        const SizedBox(height: 6),
-        SelectableText(text,
-            style: const TextStyle(
-                fontSize: 15, height: 1.55, color: Color(0xFF253047))),
-      ]),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.notes_rounded, color: Color(0xFFABB4C5), size: 28),
+            SizedBox(height: 10),
+            Text(
+              'Здесь появится ответ',
+              style: TextStyle(color: Color(0xFF7A8496)),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

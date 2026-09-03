@@ -7,13 +7,13 @@ export class UpstreamError extends Error {
 
 export function createDeepSeekClient({apiKey, model, apiUrl, fetchImpl = fetch}) {
   return {
-    async complete(messages, {json = false} = {}) {
+    async complete(messages, {json = false, temperature = 0.7} = {}) {
       let response;
       try {
         response = await fetchImpl(apiUrl, {
           method: 'POST',
           headers: {'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}`},
-          body: JSON.stringify({model, messages, temperature: 0.7, ...(json ? {response_format: {type: 'json_object'}} : {})}),
+          body: JSON.stringify({model, messages, temperature, ...(json ? {response_format: {type: 'json_object'}} : {})}),
           signal: AbortSignal.timeout(60000),
         });
       } catch (error) {
