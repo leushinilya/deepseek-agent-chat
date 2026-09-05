@@ -1,30 +1,16 @@
-# Сравнение температур DeepSeek
+# Сравнение AI-моделей
 
-Flutter Web страница для одновременного сравнения девяти ответов модели: по три независимых варианта с температурами `0`, `0.7` и `1.2`. После получения ответов модель выставляет каждой температуре итоговые оценки точности, креативности и разнообразия. Node.js proxy хранит ключ только на сервере и обращается к OpenAI-compatible API.
+Flutter Web-приложение отправляет один запрос одновременно в три модели:
 
-## Структура
+- локальную GigaChat 3.1 через Ollama на `http://localhost:11434`;
+- `deepseek-v4-flash` через DeepSeek API;
+- `deepseek-v4-pro` через DeepSeek API.
 
-```text
-.
-├── lib/main.dart          # Тема и запуск Flutter-приложения
-├── lib/pages/             # Страница сравнения
-├── lib/comparison/        # Валидация, модели, API-клиент и параллельный координатор
-├── web/index.html         # HTML bootstrap Flutter Web
-├── backend/
-│   ├── src/               # Express proxy, промты и клиент DeepSeek API
-│   ├── .env.example       # Пример конфигурации
-│   └── package.json
-├── pubspec.yaml
-└── README.md
-```
+Для каждого ответа интерфейс показывает время, число входных и выходных токенов и стоимость. Стоимость DeepSeek рассчитывается по фактическому `usage` ответа с учётом cache hit и действующих peak/off-peak тарифов. Локальный запуск GigaChat 3.1 отмечается как бесплатный.
 
-## Требования
+## Запуск
 
-- Flutter SDK 3.3+ с включенной поддержкой web
-- Node.js 18+ (рекомендуется Node.js 20+)
-- API-ключ DeepSeek
-
-## Запуск backend
+Убедитесь, что Ollama доступна на порту `11434`. По умолчанию используется модель `hf.co/ai-sage/GigaChat3.1-10B-A1.8B-GGUF:Q4_K_M`; другое имя можно задать через `LOCAL_MODEL`.
 
 ```powershell
 cd backend
@@ -32,53 +18,33 @@ npm install
 Copy-Item .env.example .env
 ```
 
-Заполните `DEEPSEEK_API_KEY` в `backend/.env`, затем запустите proxy:
+Укажите `DEEPSEEK_API_KEY` в `backend/.env`, затем запустите proxy:
 
 ```powershell
 npm run dev
 ```
 
-Сервер будет доступен на `http://localhost:3000`.
-
-## Запуск Flutter Web
-
-В отдельном терминале из корня проекта:
+В отдельном терминале из корня проекта запустите Flutter Web:
 
 ```powershell
 flutter pub get
 flutter run -d chrome
 ```
 
-По умолчанию клиент обращается к `http://localhost:3000`. Чтобы задать другой базовый адрес proxy:
+Клиент по умолчанию обращается к `http://localhost:3000`. Другой адрес можно передать через `--dart-define=API_BASE_URL=...`.
 
-```powershell
-flutter run -d chrome --dart-define=API_BASE_URL=http://localhost:3000
-```
-
-Для запуска уже собранной production-версии локально:
-
-```powershell
-node scripts/serve-web.mjs
-```
-
-## Настройка модели
-
-В `backend/.env` укажите ключ, модель и OpenAI-compatible endpoint:
+## Конфигурация backend
 
 ```env
-DEEPSEEK_MODEL=deepseek-v4-flash
+DEEPSEEK_API_KEY=your_deepseek_api_key_here
 DEEPSEEK_API_URL=https://api.deepseek.com/chat/completions
+OLLAMA_API_URL=http://localhost:11434/api/chat
+LOCAL_MODEL=hf.co/ai-sage/GigaChat3.1-10B-A1.8B-GGUF:Q4_K_M
+PORT=3000
+FRONTEND_ORIGIN=http://localhost:8080
 ```
 
-Для более мощной модели замените значение на `deepseek-v4-pro` и перезапустите backend.
-
-## Безопасность
-
-- `DEEPSEEK_API_KEY` читается только backend-процессом из `backend/.env`.
-- `.env` исключен из Git и не попадает в Flutter Web bundle.
-- CORS включается лишь при заданном `FRONTEND_ORIGIN`, что предназначено для локальной разработки.
-- Proxy ограничивает размер JSON-запроса, количество сообщений и длину каждого сообщения.
-- Клиент запускает девять запросов параллельно и отменяет незавершённый пакет при повторном запуске.
+Ключ DeepSeek хранится только в backend и не попадает в Flutter Web bundle.
 
 ## Проверки
 

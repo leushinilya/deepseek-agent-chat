@@ -6,17 +6,12 @@ import 'package:http/http.dart' as http;
 import 'models.dart';
 
 abstract interface class ComparisonGateway {
-  Future<String> fetchAnswer(String query, double temperature);
-  Future<ComparisonEvaluation> evaluate(
-    String query,
-    Map<ComparisonVariant, String> answers,
-  );
+  Future<ModelResponse> fetchAnswer(String query, ModelTarget target);
   void close();
 }
 
 class ComparisonApiException implements Exception {
   const ComparisonApiException(this.message);
-
   final String message;
 }
 
@@ -24,72 +19,41 @@ class ComparisonApiClient implements ComparisonGateway {
   ComparisonApiClient({http.Client? client, String? baseUrl})
       : _client = client ?? http.Client(),
         _baseUrl = baseUrl ??
-            const String.fromEnvironment(
-              'API_BASE_URL',
-              defaultValue: 'http://localhost:3000',
-            );
+            const String.fromEnvironment('API_BASE_URL',
+                defaultValue: 'http://localhost:3000');
 
   final http.Client _client;
   final String _baseUrl;
 
   @override
-  Future<String> fetchAnswer(String query, double temperature) async {
-    final payload = await _post('/api/compare', {
-      'query': query,
-      'temperature': temperature,
-    });
+  Future<ModelResponse> fetchAnswer(String query, ModelTarget target) async {
+    final payload =
+        await _post('/api/compare', {'query': query, 'model': target.id});
     final answer = payload['answer'];
-    if (answer is! String || answer.trim().isEmpty) {
+    final metrics = payload['metrics'];
+    if (answer is! String ||
+        answer.trim().isEmpty ||
+        metrics is! Map<String, dynamic>) {
       throw const ComparisonApiException('Сервер вернул некорректный ответ.');
     }
-    return answer.trim();
-  }
-
-  @override
-  Future<ComparisonEvaluation> evaluate(
-    String query,
-    Map<ComparisonVariant, String> answers,
-  ) async {
-    final groups = <Map<String, Object>>[];
-    for (final temperature in [0.0, 0.7, 1.2]) {
-      groups.add({
-        'temperature': temperature,
-        'answers': [
-          for (final variant in ComparisonVariant.values)
-            if (variant.temperature == temperature) answers[variant]!,
-        ],
-      });
-    }
-    final payload = await _post('/api/evaluate', {
-      'query': query,
-      'groups': groups,
-    });
-    final rawItems = payload['evaluations'];
-    if (rawItems is! List || rawItems.length != 3) {
-      throw const ComparisonApiException('Сервер вернул некорректную оценку.');
-    }
     try {
-      return ComparisonEvaluation(
-        items: rawItems.map((raw) {
-          final item = raw as Map<String, dynamic>;
-          return TemperatureEvaluation(
-            temperature: (item['temperature'] as num).toDouble(),
-            accuracy: item['accuracy'] as int,
-            creativity: item['creativity'] as int,
-            diversity: item['diversity'] as int,
-            summary: (item['summary'] as String).trim(),
-          );
-        }).toList(),
+      return ModelResponse(
+        answer: normalizeAnswerText(answer),
+        durationMs: (metrics['durationMs'] as num).round(),
+        promptTokens: (metrics['promptTokens'] as num).round(),
+        completionTokens: (metrics['completionTokens'] as num).round(),
+        totalTokens: (metrics['totalTokens'] as num).round(),
+        costUsd: metrics['costUsd'] == null
+            ? null
+            : (metrics['costUsd'] as num).toDouble(),
       );
     } catch (_) {
-      throw const ComparisonApiException('Сервер вернул некорректную оценку.');
+      throw const ComparisonApiException('Сервер вернул некорректные метрики.');
     }
   }
 
   Future<Map<String, dynamic>> _post(
-    String path,
-    Map<String, Object> body,
-  ) async {
+      String path, Map<String, Object> body) async {
     try {
       final response = await _client
           .post(
@@ -97,27 +61,24 @@ class ComparisonApiClient implements ComparisonGateway {
             headers: {'Content-Type': 'application/json'},
             body: jsonEncode(body),
           )
-          .timeout(const Duration(seconds: 90));
+          .timeout(const Duration(minutes: 3));
       final payload = _decodeObject(response.body);
       if (response.statusCode < 200 || response.statusCode >= 300) {
         final message = payload['error'];
         throw ComparisonApiException(
-          message is String ? message : 'Не удалось получить ответ.',
-        );
+            message is String ? message : 'Не удалось получить ответ.');
       }
       return payload;
     } on TimeoutException {
       throw const ComparisonApiException(
-        'Сервер слишком долго отвечает. Попробуйте ещё раз.',
-      );
+          'Модель слишком долго отвечает. Попробуйте ещё раз.');
     } on ComparisonApiException {
       rethrow;
     } on FormatException {
       throw const ComparisonApiException('Сервер вернул некорректный ответ.');
     } catch (_) {
       throw const ComparisonApiException(
-        'Не удалось связаться с сервером. Проверьте подключение.',
-      );
+          'Не удалось связаться с сервером. Проверьте подключение.');
     }
   }
 
@@ -129,4 +90,29 @@ class ComparisonApiClient implements ComparisonGateway {
 
   @override
   void close() => _client.close();
+}
+
+String normalizeAnswerText(String value) {
+  final trimmed = value.trim();
+  final result = StringBuffer();
+  for (var index = 0; index < trimmed.length; index++) {
+    final isUnescapedSlash = trimmed.codeUnitAt(index) == 92 &&
+        (index == 0 || trimmed.codeUnitAt(index - 1) != 92);
+    if (isUnescapedSlash &&
+        index + 3 < trimmed.length &&
+        trimmed[index + 1] == 'r' &&
+        trimmed.codeUnitAt(index + 2) == 92 &&
+        trimmed[index + 3] == 'n') {
+      result.write('\n');
+      index += 3;
+    } else if (isUnescapedSlash &&
+        index + 1 < trimmed.length &&
+        (trimmed[index + 1] == 'n' || trimmed[index + 1] == 'r')) {
+      result.write('\n');
+      index += 1;
+    } else {
+      result.write(trimmed[index]);
+    }
+  }
+  return result.toString();
 }

@@ -14,21 +14,21 @@ class ComparisonPage extends StatefulWidget {
 }
 
 class _ComparisonPageState extends State<ComparisonPage> {
-  static const _temperatures = [0.0, 0.7, 1.2];
-
   final _queryController = TextEditingController();
   final _queryFocus = FocusNode();
   late final ComparisonRunner _runner =
       ComparisonRunner(() => ComparisonApiClient());
-  final _states = <ComparisonVariant, _ResultState>{
-    for (final variant in ComparisonVariant.values)
-      variant: const _ResultState(),
+  final _states = <ModelTarget, _ResultState>{
+    for (final target in ModelTarget.values) target: const _ResultState(),
+  };
+  final _selected = <ModelTarget, bool>{
+    for (final target in ModelTarget.values) target: true,
   };
   String? _queryError;
-  _EvaluationState _evaluationState = const _EvaluationState();
 
-  bool get _isRunning =>
-      _states.values.any((state) => state.loading) || _evaluationState.loading;
+  bool get _isRunning => _states.values.any((state) => state.loading);
+  bool get _hasResults =>
+      _states.values.any((state) => state.value != null || state.error != null);
 
   @override
   void dispose() {
@@ -48,38 +48,40 @@ class _ComparisonPageState extends State<ComparisonPage> {
       _queryFocus.requestFocus();
       return;
     }
-
+    final selectedTargets = ModelTarget.values
+        .where((target) => _selected[target]!)
+        .toList(growable: false);
+    if (selectedTargets.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Выберите хотя бы одну модель.')),
+      );
+      return;
+    }
     setState(() {
-      for (final variant in ComparisonVariant.values) {
-        _states[variant] = const _ResultState(loading: true);
+      for (final target in ModelTarget.values) {
+        _states[target] = _selected[target]!
+            ? const _ResultState(loading: true)
+            : const _ResultState();
       }
-      _evaluationState = const _EvaluationState(loading: true);
     });
     await _runner.run(
       query: query,
+      targets: selectedTargets,
       onUpdate: _applyUpdate,
-      onEvaluation: _applyEvaluation,
     );
   }
 
-  void _applyEvaluation(EvaluationUpdate update) {
-    if (!mounted) return;
+  void _setSelected(ModelTarget target, bool value) {
     setState(() {
-      _evaluationState = _EvaluationState(
-        value: update.value,
-        error: update.error,
-      );
+      _selected[target] = value;
+      _states[target] = const _ResultState();
     });
   }
 
-  void _applyUpdate(VariantUpdate update) {
+  void _applyUpdate(ModelUpdate update) {
     if (!mounted) return;
-    setState(() {
-      _states[update.variant] = _ResultState(
-        value: update.value,
-        error: update.error,
-      );
-    });
+    setState(() => _states[update.target] =
+        _ResultState(value: update.value, error: update.error));
   }
 
   Future<void> _copy(String value) async {
@@ -87,9 +89,7 @@ class _ComparisonPageState extends State<ComparisonPage> {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
-        content: Text('Ответ скопирован'),
-        duration: Duration(seconds: 2),
-      ),
+          content: Text('Ответ скопирован'), duration: Duration(seconds: 2)),
     );
   }
 
@@ -101,7 +101,7 @@ class _ComparisonPageState extends State<ComparisonPage> {
           slivers: [
             SliverToBoxAdapter(child: _buildHeader()),
             SliverPadding(
-              padding: const EdgeInsets.fromLTRB(20, 0, 20, 40),
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 48),
               sliver: SliverToBoxAdapter(
                 child: Center(
                   child: ConstrainedBox(
@@ -113,7 +113,7 @@ class _ComparisonPageState extends State<ComparisonPage> {
                         const SizedBox(height: 24),
                         _buildResults(),
                         const SizedBox(height: 24),
-                        _buildEvaluation(),
+                        _buildSummary(),
                       ],
                     ),
                   ),
@@ -138,26 +138,21 @@ class _ComparisonPageState extends State<ComparisonPage> {
                 width: 42,
                 height: 42,
                 decoration: BoxDecoration(
-                  color: const Color(0xFF3659D9),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child:
-                    const Icon(Icons.thermostat_rounded, color: Colors.white),
+                    color: const Color(0xFF3659D9),
+                    borderRadius: BorderRadius.circular(12)),
+                child: const Icon(Icons.compare_arrows_rounded,
+                    color: Colors.white),
               ),
               const SizedBox(width: 13),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      'Сравнение температур DeepSeek',
-                      style: Theme.of(context).textTheme.headlineMedium,
-                    ),
+                    Text('Сравнение моделей',
+                        style: Theme.of(context).textTheme.headlineMedium),
                     const SizedBox(height: 2),
-                    const Text(
-                      'Один запрос — девять независимых вариантов ответа',
-                      style: TextStyle(color: Color(0xFF667085)),
-                    ),
+                    const Text('Один запрос — три независимых ответа',
+                        style: TextStyle(color: Color(0xFF667085))),
                   ],
                 ),
               ),
@@ -169,20 +164,7 @@ class _ComparisonPageState extends State<ComparisonPage> {
   }
 
   Widget _buildComposer() {
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: const Color(0xFFE1E6EF)),
-        boxShadow: const [
-          BoxShadow(
-            color: Color(0x0A162033),
-            blurRadius: 24,
-            offset: Offset(0, 8),
-          ),
-        ],
-      ),
+    return _Surface(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -191,36 +173,26 @@ class _ComparisonPageState extends State<ComparisonPage> {
             controller: _queryController,
             focusNode: _queryFocus,
             minLines: 4,
-            maxLines: 8,
+            maxLines: null,
             maxLength: maxQueryLength,
             decoration: InputDecoration(
               labelText: 'Запрос',
               alignLabelWithHint: true,
               hintText:
-                  'Например: составь план подготовки к техническому собеседованию',
+                  'Например: объясни простыми словами, как работает квантовый компьютер',
               errorText: _queryError,
             ),
           ),
           const SizedBox(height: 16),
           Align(
             alignment: Alignment.centerRight,
-            child: Semantics(
-              button: true,
-              label: _isRunning
-                  ? 'Перезапустить сравнение и отменить текущие запросы'
-                  : 'Получить девять ответов',
-              child: FilledButton.icon(
-                key: const Key('runButton'),
-                onPressed: _runComparison,
-                icon: Icon(
-                  _isRunning
-                      ? Icons.refresh_rounded
-                      : Icons.auto_awesome_rounded,
-                ),
-                label: Text(
-                  _isRunning ? 'Запустить заново' : 'Получить ответы',
-                ),
-              ),
+            child: FilledButton.icon(
+              key: const Key('runButton'),
+              onPressed: _runComparison,
+              icon: Icon(_isRunning
+                  ? Icons.refresh_rounded
+                  : Icons.auto_awesome_rounded),
+              label: Text(_isRunning ? 'Запустить заново' : 'Получить ответы'),
             ),
           ),
         ],
@@ -232,22 +204,26 @@ class _ComparisonPageState extends State<ComparisonPage> {
     return LayoutBuilder(
       builder: (context, constraints) {
         const gap = 18.0;
-        final wide = constraints.maxWidth >= 1050;
-        final columnWidth =
-            wide ? (constraints.maxWidth - gap * 2) / 3 : constraints.maxWidth;
+        final columns = constraints.maxWidth >= 900
+            ? 3
+            : constraints.maxWidth >= 700
+                ? 2
+                : 1;
+        final width = (constraints.maxWidth - gap * (columns - 1)) / columns;
         return Wrap(
           spacing: gap,
           runSpacing: gap,
           children: [
-            for (final temperature in _temperatures)
+            for (final target in ModelTarget.values)
               SizedBox(
-                width: columnWidth,
-                child: _TemperatureColumn(
-                  temperature: temperature,
-                  variants: ComparisonVariant.values
-                      .where((item) => item.temperature == temperature)
-                      .toList(),
-                  states: _states,
+                width: width,
+                child: _AnswerCard(
+                  target: target,
+                  state: _states[target]!,
+                  selected: _selected[target]!,
+                  onSelected: _isRunning
+                      ? null
+                      : (value) => _setSelected(target, value),
                   onCopy: _copy,
                 ),
               ),
@@ -257,86 +233,52 @@ class _ComparisonPageState extends State<ComparisonPage> {
     );
   }
 
-  Widget _buildEvaluation() {
-    return Container(
-      key: const Key('evaluationSection'),
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: const Color(0xFFE1E6EF)),
-      ),
+  Widget _buildSummary() {
+    return _Surface(
+      key: const Key('summarySection'),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Row(
             children: [
-              const Icon(
-                Icons.analytics_outlined,
-                color: Color(0xFF3659D9),
-              ),
+              const Icon(Icons.query_stats_rounded, color: Color(0xFF3659D9)),
               const SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  'Итоговая оценка',
-                  style: Theme.of(context).textTheme.titleLarge,
-                ),
-              ),
+              Text('Итоги', style: Theme.of(context).textTheme.titleLarge),
             ],
           ),
           const SizedBox(height: 6),
-          const Text(
-            'Средняя оценка трёх вариантов для каждой температуры · шкала от 1 до 10',
-            style: TextStyle(color: Color(0xFF667085), height: 1.4),
-          ),
+          const Text('Фактические показатели последнего запуска',
+              style: TextStyle(color: Color(0xFF667085))),
           const SizedBox(height: 18),
-          if (_evaluationState.loading)
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 26),
-              child: Column(
+          LayoutBuilder(
+            builder: (context, constraints) {
+              const gap = 12.0;
+              final stacked = constraints.maxWidth < 780;
+              final width = stacked
+                  ? constraints.maxWidth
+                  : (constraints.maxWidth - gap * 2) / 3;
+              return Wrap(
+                spacing: gap,
+                runSpacing: gap,
                 children: [
-                  LinearProgressIndicator(),
-                  SizedBox(height: 12),
-                  Text(
-                    'Дождитесь всех ответов — затем модель сравнит результаты',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: Color(0xFF667085)),
-                  ),
-                ],
-              ),
-            )
-          else if (_evaluationState.error != null)
-            _EvaluationError(message: _evaluationState.error!)
-          else if (_evaluationState.value != null)
-            LayoutBuilder(
-              builder: (context, constraints) {
-                const gap = 14.0;
-                final wide = constraints.maxWidth >= 900;
-                final width = wide
-                    ? (constraints.maxWidth - gap * 2) / 3
-                    : constraints.maxWidth;
-                return Wrap(
-                  spacing: gap,
-                  runSpacing: gap,
-                  children: [
-                    for (final item in _evaluationState.value!.items)
-                      SizedBox(
+                  for (final target in ModelTarget.values)
+                    SizedBox(
                         width: width,
-                        child: _EvaluationCard(item: item),
-                      ),
-                  ],
-                );
-              },
-            )
-          else
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 24),
-              child: Text(
-                'Оценка появится после получения всех девяти ответов.',
+                        child: _SummaryCard(
+                          target: target,
+                          state: _states[target]!,
+                          selected: _selected[target]!,
+                        )),
+                ],
+              );
+            },
+          ),
+          if (!_hasResults && !_isRunning) ...[
+            const SizedBox(height: 16),
+            const Text('Метрики появятся после получения ответов.',
                 textAlign: TextAlign.center,
-                style: TextStyle(color: Color(0xFF7A8496)),
-              ),
-            ),
+                style: TextStyle(color: Color(0xFF7A8496))),
+          ],
         ],
       ),
     );
@@ -345,216 +287,55 @@ class _ComparisonPageState extends State<ComparisonPage> {
 
 class _ResultState {
   const _ResultState({this.value, this.error, this.loading = false});
-
-  final String? value;
+  final ModelResponse? value;
   final String? error;
   final bool loading;
 }
 
-class _EvaluationState {
-  const _EvaluationState({this.value, this.error, this.loading = false});
-
-  final ComparisonEvaluation? value;
-  final String? error;
-  final bool loading;
-}
-
-class _EvaluationCard extends StatelessWidget {
-  const _EvaluationCard({required this.item});
-
-  final TemperatureEvaluation item;
-
-  String get _temperatureLabel =>
-      item.temperature == 0 ? '0' : '${item.temperature}';
+class _Surface extends StatelessWidget {
+  const _Surface({required this.child, super.key});
+  final Widget child;
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        color: const Color(0xFFF8FAFC),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFFE3E8F0)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(
-            'Temperature: $_temperatureLabel',
-            style: const TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.w800,
-              color: Color(0xFF172033),
-            ),
-          ),
-          const SizedBox(height: 14),
-          _ScoreRow(label: 'Точность', score: item.accuracy),
-          const SizedBox(height: 9),
-          _ScoreRow(label: 'Креативность', score: item.creativity),
-          const SizedBox(height: 9),
-          _ScoreRow(label: 'Разнообразие', score: item.diversity),
-          const SizedBox(height: 14),
-          Text(
-            item.summary,
-            style: const TextStyle(
-              color: Color(0xFF475467),
-              height: 1.45,
-              fontSize: 13,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ScoreRow extends StatelessWidget {
-  const _ScoreRow({required this.label, required this.score});
-
-  final String label;
-  final int score;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Expanded(
-          child: Text(
-            label,
-            style: const TextStyle(
-              fontWeight: FontWeight.w600,
-              color: Color(0xFF344054),
-            ),
-          ),
-        ),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-          decoration: BoxDecoration(
-            color: const Color(0xFFE8EDFF),
-            borderRadius: BorderRadius.circular(20),
-          ),
-          child: Text(
-            '$score / 10',
-            style: const TextStyle(
-              fontWeight: FontWeight.w800,
-              color: Color(0xFF2949BE),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _EvaluationError extends StatelessWidget {
-  const _EvaluationError({required this.message});
-
-  final String message;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: const Color(0xFFFFF1F0),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Row(
-        children: [
-          const Icon(Icons.error_outline_rounded, color: Color(0xFFB42318)),
-          const SizedBox(width: 9),
-          Expanded(
-            child: Text(
-              message,
-              style: const TextStyle(color: Color(0xFF912018)),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _TemperatureColumn extends StatelessWidget {
-  const _TemperatureColumn({
-    required this.temperature,
-    required this.variants,
-    required this.states,
-    required this.onCopy,
-  });
-
-  final double temperature;
-  final List<ComparisonVariant> variants;
-  final Map<ComparisonVariant, _ResultState> states;
-  final ValueChanged<String> onCopy;
-
-  String get _temperatureLabel => temperature == 0 ? '0' : '$temperature';
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF0F3F9),
+        color: Colors.white,
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: const Color(0xFFDCE2ED)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(4, 2, 4, 14),
-            child: Row(
-              children: [
-                const Icon(
-                  Icons.device_thermostat_rounded,
-                  color: Color(0xFF3659D9),
-                  size: 21,
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  'Temperature: $_temperatureLabel',
-                  key: Key('temperature-$_temperatureLabel'),
-                  style: Theme.of(context).textTheme.titleLarge,
-                ),
-              ],
-            ),
-          ),
-          for (var index = 0; index < variants.length; index++) ...[
-            _AnswerCard(
-              variant: variants[index],
-              state: states[variants[index]]!,
-              onCopy: onCopy,
-            ),
-            if (index != variants.length - 1) const SizedBox(height: 14),
-          ],
+        border: Border.all(color: const Color(0xFFE1E6EF)),
+        boxShadow: const [
+          BoxShadow(
+              color: Color(0x0A162033), blurRadius: 24, offset: Offset(0, 8))
         ],
       ),
+      child: child,
     );
   }
 }
 
 class _AnswerCard extends StatelessWidget {
   const _AnswerCard({
-    required this.variant,
+    required this.target,
     required this.state,
+    required this.selected,
+    required this.onSelected,
     required this.onCopy,
   });
-
-  final ComparisonVariant variant;
+  final ModelTarget target;
   final _ResultState state;
+  final bool selected;
+  final ValueChanged<bool>? onSelected;
   final ValueChanged<String> onCopy;
 
   @override
   Widget build(BuildContext context) {
-    final title = 'Вариант ${variant.variantNumber}';
     return Container(
-      constraints: const BoxConstraints(minHeight: 220),
+      constraints: const BoxConstraints(minHeight: 390),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(15),
-        border: Border.all(color: const Color(0xFFE1E6EF)),
-      ),
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: const Color(0xFFDCE2ED))),
       clipBehavior: Clip.antiAlias,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -564,39 +345,76 @@ class _AnswerCard extends StatelessWidget {
           else
             const SizedBox(height: 3),
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 8, 10),
+            padding: const EdgeInsets.fromLTRB(18, 14, 8, 12),
             child: Row(
               children: [
+                Container(
+                  width: 38,
+                  height: 38,
+                  decoration: BoxDecoration(
+                      color: target == ModelTarget.gigaChat
+                          ? const Color(0xFFEAF8F1)
+                          : const Color(0xFFE8EDFF),
+                      borderRadius: BorderRadius.circular(10)),
+                  child: Icon(
+                      target == ModelTarget.gigaChat
+                          ? Icons.computer_rounded
+                          : Icons.cloud_outlined,
+                      color: target == ModelTarget.gigaChat
+                          ? const Color(0xFF16794B)
+                          : const Color(0xFF3659D9),
+                      size: 20),
+                ),
+                const SizedBox(width: 11),
                 Expanded(
-                  child: Text(
-                    title,
-                    style: const TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w700,
-                      color: Color(0xFF344054),
-                    ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(target.title,
+                          style: const TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w800,
+                              color: Color(0xFF172033))),
+                      Text(target.provider,
+                          style: const TextStyle(
+                              fontSize: 12, color: Color(0xFF7A8496))),
+                    ],
                   ),
                 ),
-                if (state.value != null)
-                  IconButton(
-                    onPressed: () => onCopy(state.value!),
-                    tooltip: 'Копировать $title',
+                Tooltip(
+                  message: selected
+                      ? 'Исключить ${target.title}'
+                      : 'Добавить ${target.title}',
+                  child: Checkbox(
+                    key: Key('model-checkbox-${target.id}'),
+                    value: selected,
+                    onChanged: onSelected == null
+                        ? null
+                        : (value) => onSelected!(value ?? false),
                     visualDensity: VisualDensity.compact,
-                    icon: const Icon(Icons.copy_rounded, size: 18),
+                    semanticLabel: 'Использовать ${target.title}',
                   ),
+                ),
+                if (selected && state.value != null)
+                  IconButton(
+                      onPressed: () => onCopy(state.value!.answer),
+                      tooltip: 'Копировать ответ',
+                      icon: const Icon(Icons.copy_rounded, size: 18)),
               ],
             ),
           ),
           const Divider(height: 1, color: Color(0xFFE9EDF4)),
-          ConstrainedBox(
-            constraints: const BoxConstraints(minHeight: 158, maxHeight: 360),
+          SizedBox(
+            height: 316,
             child: SingleChildScrollView(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.all(18),
               child: Semantics(
-                liveRegion: true,
-                label: state.loading ? '$title загружается' : title,
-                child: _buildBody(),
-              ),
+                  key: ValueKey('answer-body-${target.id}-$selected'),
+                  liveRegion: true,
+                  label: state.loading
+                      ? '${target.title} загружается'
+                      : target.title,
+                  child: _body()),
             ),
           ),
         ],
@@ -604,73 +422,154 @@ class _AnswerCard extends StatelessWidget {
     );
   }
 
-  Widget _buildBody() {
-    if (state.error != null) {
-      return Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Icon(
-            Icons.error_outline_rounded,
-            color: Color(0xFFB42318),
-            size: 20,
-          ),
-          const SizedBox(width: 9),
-          Expanded(
-            child: Text(
-              state.error!,
-              style: const TextStyle(color: Color(0xFF912018), height: 1.4),
+  Widget _body() {
+    if (!selected) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 92),
+        child: Center(
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Icon(Icons.remove_circle_outline_rounded,
+                color: Color(0xFFABB4C5), size: 28),
+            SizedBox(height: 10),
+            Text(
+              'Модель не участвует в обработке',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Color(0xFF7A8496)),
             ),
-          ),
-        ],
-      );
-    }
-    if (state.value != null) {
-      return SelectableText(
-        state.value!,
-        style: const TextStyle(
-          fontSize: 15,
-          height: 1.55,
-          color: Color(0xFF253047),
+          ]),
         ),
       );
+    }
+    if (state.error != null) {
+      return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Icon(Icons.error_outline_rounded,
+            color: Color(0xFFB42318), size: 20),
+        const SizedBox(width: 9),
+        Expanded(
+            child: Text(state.error!,
+                style: const TextStyle(color: Color(0xFF912018), height: 1.4))),
+      ]);
+    }
+    if (state.value != null) {
+      return SelectableText(state.value!.answer,
+          style: const TextStyle(
+              fontSize: 15, height: 1.55, color: Color(0xFF253047)));
     }
     if (state.loading) {
       return const Padding(
-        padding: EdgeInsets.symmetric(vertical: 42),
+        padding: EdgeInsets.symmetric(vertical: 92),
         child: Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              SizedBox(
-                width: 28,
-                height: 28,
-                child: CircularProgressIndicator(strokeWidth: 2.5),
-              ),
-              SizedBox(height: 12),
-              Text(
-                'Формируем ответ…',
-                style: TextStyle(color: Color(0xFF667085)),
-              ),
-            ],
-          ),
-        ),
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+          SizedBox(
+              width: 28,
+              height: 28,
+              child: CircularProgressIndicator(strokeWidth: 2.5)),
+          SizedBox(height: 12),
+          Text('Формируем ответ…', style: TextStyle(color: Color(0xFF667085))),
+        ])),
       );
     }
     return const Padding(
-      padding: EdgeInsets.symmetric(vertical: 46),
+      padding: EdgeInsets.symmetric(vertical: 92),
       child: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.notes_rounded, color: Color(0xFFABB4C5), size: 28),
-            SizedBox(height: 10),
-            Text(
-              'Здесь появится ответ',
-              style: TextStyle(color: Color(0xFF7A8496)),
-            ),
-          ],
-        ),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+        Icon(Icons.notes_rounded, color: Color(0xFFABB4C5), size: 28),
+        SizedBox(height: 10),
+        Text('Здесь появится ответ',
+            style: TextStyle(color: Color(0xFF7A8496))),
+      ])),
+    );
+  }
+}
+
+class _SummaryCard extends StatelessWidget {
+  const _SummaryCard({
+    required this.target,
+    required this.state,
+    required this.selected,
+  });
+  final ModelTarget target;
+  final _ResultState state;
+  final bool selected;
+
+  @override
+  Widget build(BuildContext context) {
+    final value = state.value;
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+          color: const Color(0xFFF8FAFC),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: const Color(0xFFE3E8F0))),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(target.title,
+              style: const TextStyle(
+                  fontWeight: FontWeight.w800, color: Color(0xFF172033))),
+          const SizedBox(height: 13),
+          _MetricRow(
+              icon: Icons.schedule_rounded,
+              label: 'Время ответа',
+              value: value == null
+                  ? _placeholder
+                  : _formatDuration(value.durationMs)),
+          const SizedBox(height: 9),
+          _MetricRow(
+              icon: Icons.data_usage_rounded,
+              label: 'Токены',
+              value: value == null
+                  ? _placeholder
+                  : '${value.totalTokens} (${value.promptTokens} + ${value.completionTokens})'),
+          const SizedBox(height: 9),
+          _MetricRow(
+              icon: Icons.payments_outlined,
+              label: 'Стоимость',
+              value: value == null
+                  ? _placeholder
+                  : value.costUsd == null
+                      ? 'Бесплатно'
+                      : '\$${value.costUsd!.toStringAsFixed(6)}'),
+        ],
       ),
     );
+  }
+
+  String get _placeholder => state.loading
+      ? 'Считаем…'
+      : !selected
+          ? 'Не участвует'
+          : state.error != null
+              ? 'Недоступно'
+              : '—';
+
+  static String _formatDuration(int milliseconds) {
+    if (milliseconds < 1000) return '$milliseconds мс';
+    return '${(milliseconds / 1000).toStringAsFixed(2)} с';
+  }
+}
+
+class _MetricRow extends StatelessWidget {
+  const _MetricRow(
+      {required this.icon, required this.label, required this.value});
+  final IconData icon;
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(children: [
+      Icon(icon, size: 18, color: const Color(0xFF667085)),
+      const SizedBox(width: 8),
+      Expanded(
+          child: Text(label,
+              style: const TextStyle(color: Color(0xFF475467), fontSize: 13))),
+      const SizedBox(width: 8),
+      Text(value,
+          style: const TextStyle(
+              fontWeight: FontWeight.w700,
+              color: Color(0xFF253047),
+              fontSize: 13)),
+    ]);
   }
 }

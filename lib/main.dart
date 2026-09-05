@@ -10,7 +10,7 @@ class DeepSeekComparisonApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Сравнение ответов AI',
+      title: 'Сравнение AI-моделей',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(

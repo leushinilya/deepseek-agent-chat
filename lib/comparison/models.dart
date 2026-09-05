@@ -1,53 +1,37 @@
-enum ComparisonVariant {
-  temperature0Variant1(0, 1),
-  temperature0Variant2(0, 2),
-  temperature0Variant3(0, 3),
-  temperature07Variant1(0.7, 1),
-  temperature07Variant2(0.7, 2),
-  temperature07Variant3(0.7, 3),
-  temperature12Variant1(1.2, 1),
-  temperature12Variant2(1.2, 2),
-  temperature12Variant3(1.2, 3);
+enum ModelTarget {
+  gigaChat('local-gigachat', 'GigaChat 3.1', 'Локальная модель', false),
+  deepseekFlash('deepseek-v4-flash', 'DeepSeek V4 Flash', 'DeepSeek API', true),
+  deepseekPro('deepseek-v4-pro', 'DeepSeek V4 Pro', 'DeepSeek API', true);
 
-  const ComparisonVariant(this.temperature, this.variantNumber);
+  const ModelTarget(this.id, this.title, this.provider, this.isPaid);
 
-  final double temperature;
-  final int variantNumber;
+  final String id;
+  final String title;
+  final String provider;
+  final bool isPaid;
 }
 
-class VariantUpdate {
-  const VariantUpdate({required this.variant, this.value, this.error});
+class ModelResponse {
+  const ModelResponse(
+      {required this.answer,
+      required this.durationMs,
+      required this.promptTokens,
+      required this.completionTokens,
+      required this.totalTokens,
+      this.costUsd});
 
-  final ComparisonVariant variant;
-  final String? value;
-  final String? error;
+  final String answer;
+  final int durationMs;
+  final int promptTokens;
+  final int completionTokens;
+  final int totalTokens;
+  final double? costUsd;
 }
 
-class TemperatureEvaluation {
-  const TemperatureEvaluation({
-    required this.temperature,
-    required this.accuracy,
-    required this.creativity,
-    required this.diversity,
-    required this.summary,
-  });
+class ModelUpdate {
+  const ModelUpdate({required this.target, this.value, this.error});
 
-  final double temperature;
-  final int accuracy;
-  final int creativity;
-  final int diversity;
-  final String summary;
-}
-
-class ComparisonEvaluation {
-  const ComparisonEvaluation({required this.items});
-
-  final List<TemperatureEvaluation> items;
-}
-
-class EvaluationUpdate {
-  const EvaluationUpdate({this.value, this.error});
-
-  final ComparisonEvaluation? value;
+  final ModelTarget target;
+  final ModelResponse? value;
   final String? error;
 }

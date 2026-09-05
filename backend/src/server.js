@@ -2,6 +2,7 @@ import 'dotenv/config';
 
 import {createApp} from './app.js';
 import {createDeepSeekClient} from './deepseek.js';
+import {createOllamaClient} from './ollama.js';
 
 const apiKey = process.env.DEEPSEEK_API_KEY;
 if (!apiKey) {
@@ -10,12 +11,17 @@ if (!apiKey) {
 }
 
 const port = Number(process.env.PORT || 3000);
-const ai = createDeepSeekClient({
+const deepseek = createDeepSeekClient({
   apiKey,
-  model: process.env.DEEPSEEK_MODEL || 'deepseek-v4-flash',
   apiUrl: process.env.DEEPSEEK_API_URL || 'https://api.deepseek.com/chat/completions',
 });
+const ollama = createOllamaClient({
+  apiUrl: process.env.OLLAMA_API_URL || 'http://localhost:11434/api/chat',
+  model:
+    process.env.LOCAL_MODEL ||
+    'hf.co/ai-sage/GigaChat3.1-10B-A1.8B-GGUF:Q4_K_M',
+});
 
-createApp({ai, frontendOrigin: process.env.FRONTEND_ORIGIN}).listen(port, () => {
-  console.log(`DeepSeek proxy is listening on http://localhost:${port}`);
+createApp({deepseek, ollama, frontendOrigin: process.env.FRONTEND_ORIGIN}).listen(port, () => {
+  console.log(`AI comparison proxy is listening on http://localhost:${port}`);
 });
