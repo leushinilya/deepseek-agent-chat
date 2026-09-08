@@ -31,6 +31,9 @@ createServer((request, response) => {
 
   response.writeHead(200, {
     'Content-Type': contentTypes[extname(filePath)] || 'application/octet-stream',
+    // This helper serves active development builds; never keep an obsolete
+    // main.dart.js after a rebuild.
+    'Cache-Control': 'no-store, max-age=0',
   });
   createReadStream(filePath).pipe(response);
 }).listen(port, () => {

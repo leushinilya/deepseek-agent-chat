@@ -1,7 +1,8 @@
 export class UpstreamError extends Error {
-  constructor(message, status = 502) {
+  constructor(message, status = 502, code = 'provider_error') {
     super(message);
     this.status = status;
+    this.code = code;
   }
 }
 
@@ -36,6 +37,7 @@ export function calculateDeepSeekCost(model, usage, date = new Date()) {
 export function createDeepSeekClient({apiKey, apiUrl, fetchImpl = fetch}) {
   return {
     async generate(messages, {model, temperature = 0.7} = {}) {
+      ensureApiKey(apiKey);
       const startedAt = Date.now();
       let response;
       try {
@@ -47,12 +49,12 @@ export function createDeepSeekClient({apiKey, apiUrl, fetchImpl = fetch}) {
         });
       } catch (error) {
         const timedOut = error?.name === 'TimeoutError' || error?.name === 'AbortError';
-        throw new UpstreamError(timedOut ? 'DeepSeek не успел ответить. Повторите попытку.' : 'Не удалось подключиться к DeepSeek API.', timedOut ? 504 : 502);
+        throw new UpstreamError(timedOut ? 'DeepSeek не успел ответить. Повторите попытку.' : 'Не удалось подключиться к DeepSeek API.', timedOut ? 504 : 502, timedOut ? 'timeout' : 'network_error');
       }
       const payload = await response.json().catch(() => null);
       if (!response.ok) {
         console.error('DeepSeek request failed with status', response.status);
-        throw new UpstreamError('DeepSeek API временно недоступен. Попробуйте ещё раз.', response.status === 429 ? 429 : 502);
+        throw deepSeekStatusError(response.status);
       }
       const answer = payload?.choices?.[0]?.message?.content;
       if (typeof answer !== 'string' || !answer.trim()) throw new UpstreamError('DeepSeek вернул пустой или некорректный ответ.');
@@ -69,6 +71,73 @@ export function createDeepSeekClient({apiKey, apiUrl, fetchImpl = fetch}) {
           costUsd: calculateDeepSeekCost(model, usage),
         },
       };
+    },
+    async *generateStream(messages, {model, temperature = 0.7, signal} = {}) {
+      ensureApiKey(apiKey);
+      const timeout = timeoutSignal(signal);
+      try {
+        const response = await fetchImpl(apiUrl, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}`},
+          body: JSON.stringify({model, messages, temperature, stream: true}),
+          signal: timeout.signal,
+        });
+        if (!response.ok) throw deepSeekStatusError(response.status);
+        if (!response.body) throw new UpstreamError('DeepSeek вернул некорректный поток данных.', 502, 'invalid_response');
+
+        let buffer = '';
+        const decoder = new TextDecoder();
+        for await (const chunk of response.body) {
+          buffer += decoder.decode(chunk, {stream: true});
+          const lines = buffer.split('\n');
+          buffer = lines.pop() ?? '';
+          for (const rawLine of lines) {
+            const line = rawLine.trim();
+            if (!line.startsWith('data:')) continue;
+            const data = line.slice(5).trim();
+            if (data === '[DONE]') return;
+            let payload;
+            try {
+              payload = JSON.parse(data);
+            } catch {
+              throw new UpstreamError('DeepSeek вернул некорректный поток данных.', 502, 'invalid_response');
+            }
+            const text = payload?.choices?.[0]?.delta?.content;
+            if (typeof text === 'string' && text) yield text;
+          }
+        }
+        throw new UpstreamError('DeepSeek завершил поток без признака окончания.', 502, 'invalid_response');
+      } catch (error) {
+        if (error instanceof UpstreamError) throw error;
+        const aborted = error?.name === 'TimeoutError' || error?.name === 'AbortError';
+        throw new UpstreamError(aborted ? 'Генерация DeepSeek была остановлена или превысила тайм-аут.' : 'Не удалось подключиться к DeepSeek API.', aborted ? 504 : 502, aborted ? 'timeout' : 'network_error');
+      } finally {
+        timeout.clear();
+      }
+    },
+  };
+}
+
+function ensureApiKey(apiKey) {
+  if (!apiKey) throw new UpstreamError('DeepSeek API не настроен: отсутствует API-ключ на сервере.', 503, 'missing_api_key');
+}
+
+function deepSeekStatusError(status) {
+  if (status === 401 || status === 403) return new UpstreamError('DeepSeek отклонил авторизацию. Проверьте API-ключ на сервере.', 502, 'authorization');
+  if (status === 429) return new UpstreamError('Превышен лимит запросов DeepSeek. Повторите попытку позже.', 429, 'rate_limit');
+  return new UpstreamError('DeepSeek API временно недоступен. Попробуйте ещё раз.', 502, 'provider_error');
+}
+
+function timeoutSignal(externalSignal) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 180000);
+  const abort = () => controller.abort();
+  externalSignal?.addEventListener('abort', abort, {once: true});
+  return {
+    signal: controller.signal,
+    clear() {
+      clearTimeout(timer);
+      externalSignal?.removeEventListener('abort', abort);
     },
   };
 }

@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
 
-import 'pages/comparison_page.dart';
+import 'agents/repository.dart';
+import 'pages/app_shell.dart';
 
 void main() => runApp(const DeepSeekComparisonApp());
 
 class DeepSeekComparisonApp extends StatelessWidget {
-  const DeepSeekComparisonApp({super.key});
+  const DeepSeekComparisonApp({super.key, this.repository});
+
+  final AgentChatRepository? repository;
 
   @override
   Widget build(BuildContext context) {
@@ -60,7 +63,60 @@ class DeepSeekComparisonApp extends StatelessWidget {
           ),
         ),
       ),
-      home: const ComparisonPage(),
+      home: _AppLoader(
+        repository:
+            repository ?? AgentChatRepository(SharedPreferencesKeyValueStore()),
+      ),
     );
   }
+}
+
+class _AppLoader extends StatefulWidget {
+  const _AppLoader({required this.repository});
+  final AgentChatRepository repository;
+
+  @override
+  State<_AppLoader> createState() => _AppLoaderState();
+}
+
+class _AppLoaderState extends State<_AppLoader> {
+  @override
+  void initState() {
+    super.initState();
+    widget.repository.load();
+  }
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+        animation: widget.repository,
+        builder: (context, _) {
+          if (!widget.repository.isLoaded) {
+            return const Scaffold(
+              body: Center(child: CircularProgressIndicator()),
+            );
+          }
+          return Stack(children: [
+            AppShell(repository: widget.repository),
+            if (widget.repository.loadError != null)
+              Positioned(
+                left: 16,
+                right: 16,
+                top: 16,
+                child: Material(
+                  color: const Color(0xFFFFF1F0),
+                  elevation: 2,
+                  borderRadius: BorderRadius.circular(12),
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Row(children: [
+                      const Icon(Icons.error_outline, color: Color(0xFFB42318)),
+                      const SizedBox(width: 10),
+                      Expanded(child: Text(widget.repository.loadError!)),
+                    ]),
+                  ),
+                ),
+              ),
+          ]);
+        },
+      );
 }

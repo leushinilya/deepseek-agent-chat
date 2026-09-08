@@ -14,12 +14,12 @@ export function createOllamaClient({apiUrl, model, fetchImpl = fetch}) {
         });
       } catch (error) {
         const timedOut = error?.name === 'TimeoutError' || error?.name === 'AbortError';
-        throw new UpstreamError(timedOut ? 'Локальная GigaChat 3.1 не успела ответить.' : 'Не удалось подключиться к GigaChat 3.1 на localhost:11434.', timedOut ? 504 : 502);
+        throw new UpstreamError(timedOut ? 'Локальная GigaChat 3.1 не успела ответить.' : 'Не удалось подключиться к Ollama. Проверьте адрес и запуск сервиса.', timedOut ? 504 : 502, timedOut ? 'timeout' : 'ollama_unavailable');
       }
       const payload = await response.json().catch(() => null);
       if (!response.ok) {
         console.error('Ollama request failed with status', response.status);
-        throw new UpstreamError('Локальная GigaChat 3.1 недоступна. Проверьте, что модель загружена и запущена.');
+        throw new UpstreamError('Локальная модель не установлена или недоступна в Ollama.', 502, 'model_not_installed');
       }
       const answer = payload?.message?.content;
       if (typeof answer !== 'string' || !answer.trim()) throw new UpstreamError('GigaChat 3.1 вернула пустой или некорректный ответ.');
@@ -35,6 +35,71 @@ export function createOllamaClient({apiUrl, model, fetchImpl = fetch}) {
           costUsd: null,
         },
       };
+    },
+    async *generateStream(messages, {signal} = {}) {
+      const timeout = timeoutSignal(signal);
+      try {
+        const response = await fetchImpl(apiUrl, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({model, messages, stream: true}),
+          signal: timeout.signal,
+        });
+        if (!response.ok) {
+          throw new UpstreamError('Локальная модель не установлена или недоступна в Ollama.', 502, 'model_not_installed');
+        }
+        if (!response.body) throw new UpstreamError('Ollama вернула некорректный поток данных.', 502, 'invalid_response');
+        let buffer = '';
+        const decoder = new TextDecoder();
+        for await (const chunk of response.body) {
+          buffer += decoder.decode(chunk, {stream: true});
+          const lines = buffer.split('\n');
+          buffer = lines.pop() ?? '';
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            let payload;
+            try {
+              payload = JSON.parse(line);
+            } catch {
+              throw new UpstreamError('Ollama вернула некорректный поток данных.', 502, 'invalid_response');
+            }
+            const text = payload?.message?.content;
+            if (typeof text === 'string' && text) yield text;
+            if (payload?.done === true) return;
+          }
+        }
+        if (buffer.trim()) {
+          try {
+            const payload = JSON.parse(buffer);
+            const text = payload?.message?.content;
+            if (typeof text === 'string' && text) yield text;
+            if (payload?.done === true) return;
+          } catch {
+            throw new UpstreamError('Ollama вернула некорректный поток данных.', 502, 'invalid_response');
+          }
+        }
+        throw new UpstreamError('Ollama завершила поток без признака окончания.', 502, 'invalid_response');
+      } catch (error) {
+        if (error instanceof UpstreamError) throw error;
+        const aborted = error?.name === 'TimeoutError' || error?.name === 'AbortError';
+        throw new UpstreamError(aborted ? 'Генерация локальной модели была остановлена или превысила тайм-аут.' : 'Не удалось подключиться к Ollama. Проверьте адрес и запуск сервиса.', aborted ? 504 : 502, aborted ? 'timeout' : 'ollama_unavailable');
+      } finally {
+        timeout.clear();
+      }
+    },
+  };
+}
+
+function timeoutSignal(externalSignal) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 180000);
+  const abort = () => controller.abort();
+  externalSignal?.addEventListener('abort', abort, {once: true});
+  return {
+    signal: controller.signal,
+    clear() {
+      clearTimeout(timer);
+      externalSignal?.removeEventListener('abort', abort);
     },
   };
 }

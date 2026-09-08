@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import {validateComparisonInput} from '../src/app.js';
+import {validateChatInput, validateComparisonInput} from '../src/app.js';
 import {calculateDeepSeekCost, createDeepSeekClient, isDeepSeekPeak} from '../src/deepseek.js';
 import {createOllamaClient} from '../src/ollama.js';
 
@@ -58,4 +58,80 @@ test('Ollama client uses local chat format and reports free usage', async () => 
   assert.equal(requestBody.model, 'hf.co/ai-sage/GigaChat3.1-10B-A1.8B-GGUF:Q4_K_M');
   assert.equal(result.metrics.totalTokens, 20);
   assert.equal(result.metrics.costUsd, null);
+});
+
+test('chat validation matches providers to exact model identifiers', () => {
+  const base = {
+    systemPrompt: 'You are helpful',
+    messages: [{role: 'user', content: 'Hello'}],
+  };
+  assert.equal(validateChatInput({...base, provider: 'ollama', model: 'local-gigachat'}), null);
+  assert.equal(validateChatInput({...base, provider: 'deepseek', model: 'deepseek-v4-flash'}), null);
+  assert.equal(validateChatInput({...base, provider: 'deepseek', model: 'deepseek-v4-pro'}), null);
+  assert.match(validateChatInput({...base, provider: 'ollama', model: 'deepseek-v4-pro'}), /соответствует/);
+  assert.match(validateChatInput({...base, provider: 'deepseek', model: 'local-gigachat'}), /соответствует/);
+});
+
+test('DeepSeek streams deltas and forwards the selected model unchanged', async () => {
+  let requestBody;
+  const client = createDeepSeekClient({
+    apiKey: 'test-key',
+    apiUrl: 'https://example.test/chat',
+    fetchImpl: async (_url, options) => {
+      requestBody = JSON.parse(options.body);
+      return new Response([
+        'data: {"choices":[{"delta":{"content":"one"}}]}',
+        'data: {"choices":[{"delta":{"content":" two"}}]}',
+        'data: [DONE]',
+        '',
+      ].join('\n'));
+    },
+  });
+  const chunks = [];
+  for await (const chunk of client.generateStream(
+    [{role: 'user', content: 'query'}],
+    {model: 'deepseek-v4-flash'},
+  )) chunks.push(chunk);
+  assert.equal(requestBody.model, 'deepseek-v4-flash');
+  assert.equal(requestBody.stream, true);
+  assert.deepEqual(chunks, ['one', ' two']);
+});
+
+test('Ollama streams chat deltas using configured model', async () => {
+  let requestBody;
+  const client = createOllamaClient({
+    apiUrl: 'http://localhost:11434/api/chat',
+    model: 'configured-model',
+    fetchImpl: async (_url, options) => {
+      requestBody = JSON.parse(options.body);
+      return new Response([
+        '{"message":{"content":"local"},"done":false}',
+        '{"message":{"content":" answer"},"done":false}',
+        '{"message":{"content":""},"done":true}',
+        '',
+      ].join('\n'));
+    },
+  });
+  const chunks = [];
+  for await (const chunk of client.generateStream([{role: 'user', content: 'query'}])) chunks.push(chunk);
+  assert.equal(requestBody.model, 'configured-model');
+  assert.equal(requestBody.stream, true);
+  assert.deepEqual(chunks, ['local', ' answer']);
+});
+
+test('DeepSeek reports missing key and authorization without exposing secrets', async () => {
+  const missing = createDeepSeekClient({apiKey: '', apiUrl: 'https://example.test/chat'});
+  await assert.rejects(
+    missing.generate([{role: 'user', content: 'query'}], {model: 'deepseek-v4-pro'}),
+    (error) => error.code === 'missing_api_key' && !error.message.includes('Bearer'),
+  );
+  const unauthorized = createDeepSeekClient({
+    apiKey: 'super-secret',
+    apiUrl: 'https://example.test/chat',
+    fetchImpl: async () => new Response('{}', {status: 401}),
+  });
+  await assert.rejects(
+    unauthorized.generate([{role: 'user', content: 'query'}], {model: 'deepseek-v4-pro'}),
+    (error) => error.code === 'authorization' && !error.message.includes('super-secret'),
+  );
 });
