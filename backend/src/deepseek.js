@@ -79,7 +79,13 @@ export function createDeepSeekClient({apiKey, apiUrl, fetchImpl = fetch}) {
         const response = await fetchImpl(apiUrl, {
           method: 'POST',
           headers: {'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}`},
-          body: JSON.stringify({model, messages, temperature, stream: true}),
+          body: JSON.stringify({
+            model,
+            messages,
+            temperature,
+            stream: true,
+            stream_options: {include_usage: true},
+          }),
           signal: timeout.signal,
         });
         if (!response.ok) throw deepSeekStatusError(response.status);
@@ -104,6 +110,13 @@ export function createDeepSeekClient({apiKey, apiUrl, fetchImpl = fetch}) {
             }
             const text = payload?.choices?.[0]?.delta?.content;
             if (typeof text === 'string' && text) yield text;
+            if (payload?.usage) {
+              yield {
+                type: 'usage',
+                promptTokens: numberOrZero(payload.usage.prompt_tokens),
+                completionTokens: numberOrZero(payload.usage.completion_tokens),
+              };
+            }
           }
         }
         throw new UpstreamError('DeepSeek завершил поток без признака окончания.', 502, 'invalid_response');

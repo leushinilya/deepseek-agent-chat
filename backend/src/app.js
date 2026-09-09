@@ -44,10 +44,21 @@ export function createApp({deepseek, ollama, frontendOrigin}) {
       const stream = req.body.provider === 'ollama'
         ? ollama.generateStream(messages, {signal: controller.signal})
         : deepseek.generateStream(messages, {model: req.body.model, signal: controller.signal});
-      for await (const text of stream) {
-        res.write(`${JSON.stringify({type: 'delta', text})}\n`);
+      let usage = null;
+      for await (const event of stream) {
+        if (typeof event === 'string') {
+          res.write(`${JSON.stringify({type: 'delta', text: event})}\n`);
+        } else if (event?.type === 'usage') {
+          usage = event;
+        }
       }
-      res.write(`${JSON.stringify({type: 'done'})}\n`);
+      res.write(`${JSON.stringify({
+        type: 'done',
+        ...(usage ? {
+          promptTokens: usage.promptTokens,
+          completionTokens: usage.completionTokens,
+        } : {}),
+      })}\n`);
       return res.end();
     } catch (error) {
       if (controller.signal.aborted) return res.end();

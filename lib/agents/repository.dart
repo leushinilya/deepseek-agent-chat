@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'models.dart';
+import 'token_counter.dart';
 
 abstract interface class KeyValueStore {
   Future<String?> read(String key);
@@ -131,7 +132,12 @@ class AgentChatRepository extends ChangeNotifier {
     return chat;
   }
 
-  ChatMessage appendMessage(String chatId, ChatRole role, String content) {
+  ChatMessage appendMessage(
+    String chatId,
+    ChatRole role,
+    String content, {
+    int? tokenCount,
+  }) {
     final index = _chats.indexWhere((chat) => chat.id == chatId);
     if (index < 0) throw StateError('Chat not found');
     final now = _clock();
@@ -140,6 +146,7 @@ class AgentChatRepository extends ChangeNotifier {
       role: role,
       content: _required(content, 'Сообщение не должно быть пустым.'),
       createdAt: now,
+      tokenCount: tokenCount ?? estimateTokenCount(content),
     );
     final chat = _chats[index];
     var title = chat.title;

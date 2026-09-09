@@ -65,7 +65,14 @@ export function createOllamaClient({apiUrl, model, fetchImpl = fetch}) {
             }
             const text = payload?.message?.content;
             if (typeof text === 'string' && text) yield text;
-            if (payload?.done === true) return;
+            if (payload?.done === true) {
+              yield {
+                type: 'usage',
+                promptTokens: numberOrZero(payload.prompt_eval_count),
+                completionTokens: numberOrZero(payload.eval_count),
+              };
+              return;
+            }
           }
         }
         if (buffer.trim()) {
@@ -73,7 +80,14 @@ export function createOllamaClient({apiUrl, model, fetchImpl = fetch}) {
             const payload = JSON.parse(buffer);
             const text = payload?.message?.content;
             if (typeof text === 'string' && text) yield text;
-            if (payload?.done === true) return;
+            if (payload?.done === true) {
+              yield {
+                type: 'usage',
+                promptTokens: numberOrZero(payload.prompt_eval_count),
+                completionTokens: numberOrZero(payload.eval_count),
+              };
+              return;
+            }
           } catch {
             throw new UpstreamError('Ollama вернула некорректный поток данных.', 502, 'invalid_response');
           }

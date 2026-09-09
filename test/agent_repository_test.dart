@@ -40,7 +40,12 @@ void main() {
     final chat = repository.createChat(agent.id);
     repository.appendMessage(
         chat.id, ChatRole.user, 'Первое сообщение пользователя');
-    repository.appendMessage(chat.id, ChatRole.assistant, 'Потоковый ответ');
+    repository.appendMessage(
+      chat.id,
+      ChatRole.assistant,
+      'Потоковый ответ',
+      tokenCount: 17,
+    );
     await repository.settled;
 
     final restored = AgentChatRepository(store);
@@ -48,6 +53,7 @@ void main() {
     expect(restored.chats.single.title, 'Первое сообщение пользователя');
     expect(restored.chats.single.messages.map((item) => item.content),
         ['Первое сообщение пользователя', 'Потоковый ответ']);
+    expect(restored.chats.single.messages.last.tokenCount, 17);
   });
 
   test('does not delete an agent with linked chats', () {

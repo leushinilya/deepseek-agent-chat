@@ -21,7 +21,9 @@ class LlmTextDelta extends LlmEvent {
 }
 
 class LlmDone extends LlmEvent {
-  const LlmDone();
+  const LlmDone({this.promptTokens, this.completionTokens});
+  final int? promptTokens;
+  final int? completionTokens;
 }
 
 class LlmException implements Exception {
@@ -105,7 +107,10 @@ class BackendLlmProvider implements LlmProvider {
               if (text is! String) throw const FormatException();
               controller.add(LlmTextDelta(text));
             case 'done':
-              controller.add(const LlmDone());
+              controller.add(LlmDone(
+                promptTokens: value['promptTokens'] as int?,
+                completionTokens: value['completionTokens'] as int?,
+              ));
             case 'error':
               throw LlmException(
                 value['message'] as String? ?? 'Ошибка генерации ответа.',

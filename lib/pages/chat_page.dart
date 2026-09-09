@@ -8,6 +8,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../agents/llm_provider.dart';
 import '../agents/models.dart';
 import '../agents/repository.dart';
+import '../agents/token_counter.dart';
 
 class ChatPage extends StatefulWidget {
   const ChatPage({
@@ -35,6 +36,7 @@ class _ChatPageState extends State<ChatPage> {
   String? _error;
   bool _generating = false;
   bool _finalized = false;
+  int? _completionTokens;
 
   @override
   void dispose() {
@@ -71,6 +73,7 @@ class _ChatPageState extends State<ChatPage> {
       _streamingText = '';
       _error = null;
       _finalized = false;
+      _completionTokens = null;
     });
     _scrollToEnd();
     final operation = widget.provider.send(
@@ -84,6 +87,7 @@ class _ChatPageState extends State<ChatPage> {
           setState(() => _streamingText += event.text);
           _scrollToEnd();
         } else if (event is LlmDone) {
+          _completionTokens = event.completionTokens;
           _finish();
         }
       },
@@ -107,8 +111,12 @@ class _ChatPageState extends State<ChatPage> {
     _finalized = true;
     final answer = _streamingText.trim();
     if (answer.isNotEmpty) {
-      widget.repository
-          .appendMessage(widget.chatId, ChatRole.assistant, answer);
+      widget.repository.appendMessage(
+        widget.chatId,
+        ChatRole.assistant,
+        answer,
+        tokenCount: _completionTokens,
+      );
     }
     if (mounted) {
       setState(() {
@@ -158,18 +166,68 @@ class _ChatPageState extends State<ChatPage> {
               body: Center(child: Text('Чат или агент недоступен.')),
             );
           }
+          final totalTokens = chat.messages.isEmpty
+              ? 0
+              : estimateTokenCount(agent.systemPrompt) +
+                  chat.messages.fold<int>(
+                    0,
+                    (sum, message) =>
+                        sum +
+                        (message.tokenCount ??
+                            estimateTokenCount(message.content)),
+                  ) +
+                  ((_generating && _streamingText.isNotEmpty)
+                      ? estimateTokenCount(_streamingText)
+                      : 0);
+          final contextLimit = agent.model.contextWindowTokens;
+          final contextProgress =
+              (totalTokens / contextLimit).clamp(0.0, 1.0).toDouble();
           return Scaffold(
             appBar: AppBar(
+              toolbarHeight: 92,
               title: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(chat.title,
                         maxLines: 1, overflow: TextOverflow.ellipsis),
                     Text('${agent.name} · ${agent.model.title}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
                             fontSize: 12,
                             fontWeight: FontWeight.w400,
                             color: Color(0xFF667085))),
+                    const SizedBox(height: 5),
+                    Semantics(
+                      label:
+                          'Использовано $totalTokens из $contextLimit токенов',
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(4),
+                        child: LinearProgressIndicator(
+                          key: const Key('chatTokenProgress'),
+                          value: contextProgress,
+                          minHeight: 5,
+                          backgroundColor: const Color(0xFFE1E6EF),
+                          color: contextProgress >= 0.9
+                              ? const Color(0xFFD92D20)
+                              : contextProgress >= 0.75
+                                  ? const Color(0xFFF79009)
+                                  : const Color(0xFF3659D9),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      'Использовано ${formatTokenNumber(totalTokens)} из ${formatTokenNumber(contextLimit)} токенов',
+                      key: const Key('chatTotalTokens'),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w500,
+                        color: Color(0xFF667085),
+                      ),
+                    ),
                   ]),
             ),
             body: SafeArea(
@@ -197,7 +255,11 @@ class _ChatPageState extends State<ChatPage> {
                                   );
                                 }
                                 final message = chat.messages[index];
-                                return _bubble(message.role, message.content);
+                                return _bubble(
+                                  message.role,
+                                  message.content,
+                                  tokenCount: message.tokenCount,
+                                );
                               },
                             ),
                     ),
@@ -249,8 +311,14 @@ class _ChatPageState extends State<ChatPage> {
         ),
       );
 
-  Widget _bubble(ChatRole role, String content, {bool streaming = false}) {
+  Widget _bubble(
+    ChatRole role,
+    String content, {
+    bool streaming = false,
+    int? tokenCount,
+  }) {
     final isUser = role == ChatRole.user;
+    final displayedTokens = tokenCount ?? estimateTokenCount(content);
     return Align(
       alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
@@ -271,21 +339,40 @@ class _ChatPageState extends State<ChatPage> {
                 SizedBox(width: 10),
                 Text('Генерирую ответ…'),
               ])
-            : isUser
-                ? SelectableText(content,
-                    style: const TextStyle(color: Colors.white, height: 1.45))
-                : MarkdownBody(
-                    data: content,
-                    selectable: true,
-                    softLineBreak: true,
-                    onTapLink: (_, href, __) {
-                      final uri = href == null ? null : Uri.tryParse(href);
-                      if (uri != null &&
-                          (uri.scheme == 'http' || uri.scheme == 'https')) {
-                        launchUrl(uri, mode: LaunchMode.externalApplication);
-                      }
-                    },
+            : Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (isUser)
+                    SelectableText(content,
+                        style:
+                            const TextStyle(color: Colors.white, height: 1.45))
+                  else
+                    MarkdownBody(
+                      data: content,
+                      selectable: true,
+                      softLineBreak: true,
+                      onTapLink: (_, href, __) {
+                        final uri = href == null ? null : Uri.tryParse(href);
+                        if (uri != null &&
+                            (uri.scheme == 'http' || uri.scheme == 'https')) {
+                          launchUrl(uri, mode: LaunchMode.externalApplication);
+                        }
+                      },
+                    ),
+                  const SizedBox(height: 7),
+                  Text(
+                    formatTokenCount(displayedTokens),
+                    key: streaming ? const Key('streamingMessageTokens') : null,
+                    style: TextStyle(
+                      color: isUser
+                          ? Colors.white.withValues(alpha: 0.72)
+                          : const Color(0xFF98A2B3),
+                      fontSize: 11,
+                      fontWeight: FontWeight.w500,
+                    ),
                   ),
+                ],
+              ),
       ),
     );
   }

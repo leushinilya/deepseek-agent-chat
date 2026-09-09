@@ -4,18 +4,21 @@ enum AgentModel {
     providerId: 'ollama',
     modelId: 'local-gigachat',
     title: 'GigaChat 3.1 (локальная)',
+    contextWindowTokens: 262144,
   ),
   deepseekFlash(
     id: 'deepseek-v4-flash',
     providerId: 'deepseek',
     modelId: 'deepseek-v4-flash',
     title: 'deepseek-v4-flash',
+    contextWindowTokens: 1000000,
   ),
   deepseekPro(
     id: 'deepseek-v4-pro',
     providerId: 'deepseek',
     modelId: 'deepseek-v4-pro',
     title: 'deepseek-v4-pro',
+    contextWindowTokens: 1000000,
   );
 
   const AgentModel({
@@ -23,12 +26,14 @@ enum AgentModel {
     required this.providerId,
     required this.modelId,
     required this.title,
+    required this.contextWindowTokens,
   });
 
   final String id;
   final String providerId;
   final String modelId;
   final String title;
+  final int contextWindowTokens;
 
   static AgentModel fromId(String id) {
     for (final value in values) {
@@ -97,18 +102,21 @@ class ChatMessage {
     required this.role,
     required this.content,
     required this.createdAt,
+    this.tokenCount,
   });
 
   final String id;
   final ChatRole role;
   final String content;
   final DateTime createdAt;
+  final int? tokenCount;
 
   Map<String, Object> toJson() => {
         'id': id,
         'role': role.name,
         'content': content,
         'createdAt': createdAt.toIso8601String(),
+        if (tokenCount != null) 'tokenCount': tokenCount!,
       };
 
   factory ChatMessage.fromJson(Map<String, dynamic> json) => ChatMessage(
@@ -116,6 +124,7 @@ class ChatMessage {
         role: ChatRole.values.firstWhere((role) => role.name == json['role']),
         content: json['content'] as String,
         createdAt: DateTime.parse(json['createdAt'] as String),
+        tokenCount: json['tokenCount'] as int?,
       );
 }
 

@@ -82,6 +82,7 @@ test('DeepSeek streams deltas and forwards the selected model unchanged', async 
       return new Response([
         'data: {"choices":[{"delta":{"content":"one"}}]}',
         'data: {"choices":[{"delta":{"content":" two"}}]}',
+        'data: {"choices":[],"usage":{"prompt_tokens":11,"completion_tokens":4}}',
         'data: [DONE]',
         '',
       ].join('\n'));
@@ -94,7 +95,12 @@ test('DeepSeek streams deltas and forwards the selected model unchanged', async 
   )) chunks.push(chunk);
   assert.equal(requestBody.model, 'deepseek-v4-flash');
   assert.equal(requestBody.stream, true);
-  assert.deepEqual(chunks, ['one', ' two']);
+  assert.deepEqual(requestBody.stream_options, {include_usage: true});
+  assert.deepEqual(chunks, [
+    'one',
+    ' two',
+    {type: 'usage', promptTokens: 11, completionTokens: 4},
+  ]);
 });
 
 test('Ollama streams chat deltas using configured model', async () => {
@@ -107,7 +113,7 @@ test('Ollama streams chat deltas using configured model', async () => {
       return new Response([
         '{"message":{"content":"local"},"done":false}',
         '{"message":{"content":" answer"},"done":false}',
-        '{"message":{"content":""},"done":true}',
+        '{"message":{"content":""},"done":true,"prompt_eval_count":9,"eval_count":3}',
         '',
       ].join('\n'));
     },
@@ -116,7 +122,11 @@ test('Ollama streams chat deltas using configured model', async () => {
   for await (const chunk of client.generateStream([{role: 'user', content: 'query'}])) chunks.push(chunk);
   assert.equal(requestBody.model, 'configured-model');
   assert.equal(requestBody.stream, true);
-  assert.deepEqual(chunks, ['local', ' answer']);
+  assert.deepEqual(chunks, [
+    'local',
+    ' answer',
+    {type: 'usage', promptTokens: 9, completionTokens: 3},
+  ]);
 });
 
 test('DeepSeek reports missing key and authorization without exposing secrets', async () => {

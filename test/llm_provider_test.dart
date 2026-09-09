@@ -35,7 +35,8 @@ void main() {
                   Stream.fromIterable([
                     utf8.encode('{"type":"delta","text":"Hel"}\n'),
                     utf8.encode('{"type":"delta","text":"lo"}\n'),
-                    utf8.encode('{"type":"done"}\n'),
+                    utf8.encode(
+                        '{"type":"done","promptTokens":12,"completionTokens":7}\n'),
                   ]),
                   200,
                 );
@@ -52,6 +53,8 @@ void main() {
     expect(events.whereType<LlmTextDelta>().map((event) => event.text),
         ['Hel', 'lo']);
     expect(events.last, isA<LlmDone>());
+    expect((events.last as LlmDone).promptTokens, 12);
+    expect((events.last as LlmDone).completionTokens, 7);
   });
 
   test('maps streamed provider error to safe exception', () async {

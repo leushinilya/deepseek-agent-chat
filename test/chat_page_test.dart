@@ -40,13 +40,21 @@ void main() {
     provider.operation.controller.add(const LlmTextDelta('ответа'));
     await tester.pump();
     expect(find.textContaining('Часть ответа'), findsOneWidget);
-    provider.operation.controller.add(const LlmDone());
+    provider.operation.controller.add(
+      const LlmDone(promptTokens: 14, completionTokens: 9),
+    );
     await provider.operation.controller.close();
     await tester.pump();
 
     final messages = repository.chatById(chat.id)!.messages;
     expect(messages, hasLength(2));
     expect(messages.last.content, 'Часть ответа');
+    expect(messages.first.tokenCount, isNotNull);
+    expect(messages.last.tokenCount, 9);
+    expect(find.text('9 токенов'), findsOneWidget);
+    expect(find.byKey(const Key('chatTotalTokens')), findsOneWidget);
+    expect(find.byKey(const Key('chatTokenProgress')), findsOneWidget);
+    expect(find.textContaining('из 262 144 токенов'), findsOneWidget);
   });
 
   testWidgets('stop cancels active provider operation', (tester) async {
