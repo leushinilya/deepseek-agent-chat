@@ -178,7 +178,10 @@ class AgentChatRepository extends ChangeNotifier {
       _chats.where((chat) => chat.agentId == id).length;
 
   String _id(String prefix) =>
-      '$prefix-${_clock().microsecondsSinceEpoch}-${_random.nextInt(1 << 32)}';
+      // Keep the bound below JavaScript's signed 32-bit shift limit. In a
+      // compiled web build, `1 << 32` wraps to zero and makes nextInt throw,
+      // preventing chats and messages from being created.
+      '$prefix-${_clock().microsecondsSinceEpoch}-${_random.nextInt(1 << 31)}';
 
   String _required(String value, String message) {
     final result = value.trim();
