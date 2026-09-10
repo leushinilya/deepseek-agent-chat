@@ -1,9 +1,35 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import {validateChatInput, validateComparisonInput} from '../src/app.js';
+import {createApp, validateChatInput, validateComparisonInput} from '../src/app.js';
 import {calculateDeepSeekCost, createDeepSeekClient, isDeepSeekPeak} from '../src/deepseek.js';
 import {createOllamaClient} from '../src/ollama.js';
+
+test('summary is validated and forwarded between system prompt and recent messages', async () => {
+  const body = {provider: 'deepseek', model: 'deepseek-v4-flash',
+    systemPrompt: 'Original instructions', contextSummary: 'Prior facts',
+    messages: [{role: 'user', content: 'Recent question'}]};
+  assert.equal(validateChatInput(body), null);
+  assert.match(validateChatInput({...body, contextSummary: {text: 'invalid'}}), /Резюме/);
+  assert.match(validateChatInput({...body, contextSummary: 'x'.repeat(24001)}), /Резюме/);
+  let forwarded;
+  const deepseek = {async *generateStream(messages) { forwarded = messages; yield 'Answer'; }};
+  const server = createApp({deepseek}).listen(0, '127.0.0.1');
+  try {
+    await new Promise(resolve => server.once('listening', resolve));
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/api/chat`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body),
+    });
+    assert.equal(response.status, 200);
+    assert.match(await response.text(), /Answer/);
+    assert.deepEqual(forwarded.map(message => message.role), ['system', 'assistant', 'user']);
+    assert.equal(forwarded[0].content, body.systemPrompt);
+    assert.match(forwarded[1].content, /Prior facts/);
+    assert.equal(forwarded[2].content, 'Recent question');
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
+});
 
 test('comparison validation accepts only supported models', () => {
   assert.match(validateComparisonInput({query: ' ', model: 'local-gigachat'}), /пустым/);

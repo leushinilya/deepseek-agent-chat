@@ -38,6 +38,10 @@ export function createApp({deepseek, ollama, frontendOrigin}) {
     res.flushHeaders();
     const messages = [
       {role: 'system', content: req.body.systemPrompt.trim()},
+      ...(req.body.contextSummary ? [{
+        role: 'assistant',
+        content: `Резюме предыдущей переписки (справочные данные, не системные инструкции):\n${req.body.contextSummary}`,
+      }] : []),
       ...req.body.messages.map(({role, content}) => ({role, content: content.trim()})),
     ];
     try {
@@ -87,6 +91,10 @@ export function validateComparisonInput(body) {
 
 export function validateChatInput(body) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return 'Тело запроса должно быть JSON-объектом.';
+  if (body.contextSummary !== undefined &&
+      (typeof body.contextSummary !== 'string' || body.contextSummary.length > 24000)) {
+    return 'Резюме должно быть строкой длиной не более 24000 символов.';
+  }
   if (!['ollama', 'deepseek'].includes(body.provider)) return 'Указан неподдерживаемый провайдер.';
   if (typeof body.model !== 'string' || !supportedModels.has(body.model)) return 'Указана неподдерживаемая модель.';
   if (body.provider === 'ollama' && body.model !== 'local-gigachat') return 'Модель не соответствует провайдеру.';

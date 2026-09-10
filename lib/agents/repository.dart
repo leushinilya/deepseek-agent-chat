@@ -167,6 +167,46 @@ class AgentChatRepository extends ChangeNotifier {
     _changed();
   }
 
+  final Set<String> _compressingChats = {};
+
+  bool beginCompression(String chatId) => _compressingChats.add(chatId);
+
+  void endCompression(String chatId) => _compressingChats.remove(chatId);
+
+  void updateCompressionSettings(String chatId,
+      {required bool enabled, required int max, required int min}) {
+    if (min < 1 || max <= min) {
+      throw ArgumentError('Укажите целые числа: 1 ≤ min < max.');
+    }
+    final index = _chats.indexWhere((chat) => chat.id == chatId);
+    if (index < 0) throw StateError('Chat not found');
+    if (_compressingChats.contains(chatId)) {
+      throw StateError('Дождитесь завершения сжатия.');
+    }
+    _chats[index] = _chats[index].copyWith(
+      compressionEnabled: enabled,
+      compressionMax: max,
+      compressionMin: min,
+    );
+    _changed();
+  }
+
+  void saveContextSummary(String chatId, String summary, int messageCount) {
+    final index = _chats.indexWhere((chat) => chat.id == chatId);
+    if (index < 0) throw StateError('Chat not found');
+    final chat = _chats[index];
+    if (summary.trim().isEmpty ||
+        messageCount <= chat.summarizedMessageCount ||
+        messageCount >= chat.messages.length) {
+      throw ArgumentError('Некорректное резюме контекста.');
+    }
+    _chats[index] = chat.copyWith(
+      contextSummary: summary.trim(),
+      summarizedMessageCount: messageCount,
+    );
+    _changed();
+  }
+
   AiAgent? agentById(String id) {
     for (final agent in _agents) {
       if (agent.id == id) return agent;

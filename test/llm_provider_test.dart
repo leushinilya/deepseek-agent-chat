@@ -43,13 +43,15 @@ void main() {
               },
             ));
     final events = await provider
-        .send(LlmRequest(agent: agent, messages: messages))
+        .send(LlmRequest(
+            agent: agent, messages: messages, summary: 'Prior facts'))
         .events
         .toList();
 
     expect(body['provider'], 'deepseek');
     expect(body['model'], 'deepseek-v4-pro');
     expect(body['systemPrompt'], 'System only');
+    expect(body['contextSummary'], 'Prior facts');
     expect(events.whereType<LlmTextDelta>().map((event) => event.text),
         ['Hel', 'lo']);
     expect(events.last, isA<LlmDone>());

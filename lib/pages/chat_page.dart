@@ -6,6 +6,7 @@ import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../agents/llm_provider.dart';
+import '../agents/context_compressor.dart';
 import '../agents/models.dart';
 import '../agents/repository.dart';
 import '../agents/token_counter.dart';
@@ -37,9 +38,28 @@ class _ChatPageState extends State<ChatPage> {
   bool _generating = false;
   bool _finalized = false;
   int? _completionTokens;
+  ContextCompressor? _compressor;
+  bool _compressing = false;
+  int? _expandedSummaryCount;
+  final _compressionForm = GlobalKey<FormState>();
+  late final TextEditingController _maxController;
+  late final TextEditingController _minController;
+
+  @override
+  void initState() {
+    super.initState();
+    final chat = widget.repository.chatById(widget.chatId);
+    _maxController =
+        TextEditingController(text: '${chat?.compressionMax ?? 20}');
+    _minController =
+        TextEditingController(text: '${chat?.compressionMin ?? 6}');
+  }
 
   @override
   void dispose() {
+    _maxController.dispose();
+    _minController.dispose();
+    _compressor?.cancel();
     _operation?.cancel();
     _subscription?.cancel();
     _controller.dispose();
@@ -52,6 +72,7 @@ class _ChatPageState extends State<ChatPage> {
     if (_generating) return;
     final chat = widget.repository.chatById(widget.chatId);
     if (chat == null) return;
+    if (!(_compressionForm.currentState?.validate() ?? true)) return;
     final agent = widget.repository.agentById(chat.agentId);
     if (agent == null) {
       setState(() => _error = 'Агент этого чата больше недоступен.');
@@ -76,8 +97,34 @@ class _ChatPageState extends State<ChatPage> {
       _completionTokens = null;
     });
     _scrollToEnd();
+    if (updatedChat.compressionEnabled &&
+        updatedChat.contextMessages.length >= updatedChat.compressionMax) {
+      setState(() => _compressing = true);
+      final compressor = ContextCompressor(widget.repository, widget.provider);
+      _compressor = compressor;
+      try {
+        await compressor.compress(updatedChat, agent);
+      } catch (error) {
+        if (!mounted) return;
+        setState(() {
+          _generating = false;
+          _error = 'Не удалось сжать контекст. История сохранена. '
+              '${error is LlmException ? error.message : 'Попробуйте ещё раз.'}';
+        });
+        return;
+      } finally {
+        _compressor = null;
+        if (mounted) setState(() => _compressing = false);
+      }
+      if (!mounted) return;
+    }
+    final contextChat = widget.repository.chatById(widget.chatId);
+    if (contextChat == null || !mounted) return;
     final operation = widget.provider.send(
-      LlmRequest(agent: agent, messages: updatedChat.messages),
+      LlmRequest(
+          agent: agent,
+          messages: contextChat.contextMessages,
+          summary: contextChat.activeSummary),
     );
     _operation = operation;
     _subscription = operation.events.listen(
@@ -128,6 +175,10 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   void _stop() {
+    if (_compressing) {
+      _compressor?.cancel();
+      return;
+    }
     _operation?.cancel();
     _subscription?.cancel();
     _finish();
@@ -169,7 +220,8 @@ class _ChatPageState extends State<ChatPage> {
           final totalTokens = chat.messages.isEmpty
               ? 0
               : estimateTokenCount(agent.systemPrompt) +
-                  chat.messages.fold<int>(
+                  estimateTokenCount(chat.activeSummary) +
+                  chat.contextMessages.fold<int>(
                     0,
                     (sum, message) =>
                         sum +
@@ -182,53 +234,81 @@ class _ChatPageState extends State<ChatPage> {
           final contextLimit = agent.model.contextWindowTokens;
           final contextProgress =
               (totalTokens / contextLimit).clamp(0.0, 1.0).toDouble();
+          final wideHeader = MediaQuery.sizeOf(context).width >= 760;
+          final hasSummary = chat.compressionEnabled &&
+              chat.contextSummary.isNotEmpty &&
+              chat.summarizedMessageCount > 0;
+          final showOriginals =
+              _expandedSummaryCount == chat.summarizedMessageCount;
+          final hiddenCount =
+              hasSummary && !showOriginals ? chat.summarizedMessageCount : 0;
+          final summaryItems = hasSummary ? 1 : 0;
+          final historyItems =
+              chat.messages.length - hiddenCount + summaryItems;
           return Scaffold(
             appBar: AppBar(
               toolbarHeight: 92,
-              title: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(chat.title,
-                        maxLines: 1, overflow: TextOverflow.ellipsis),
-                    Text('${agent.name} · ${agent.model.title}',
+              title: Row(children: [
+                Expanded(
+                    child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                      Text(chat.title,
+                          maxLines: 1, overflow: TextOverflow.ellipsis),
+                      Text('${agent.name} · ${agent.model.title}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w400,
+                              color: Color(0xFF667085))),
+                      const SizedBox(height: 5),
+                      Semantics(
+                        label:
+                            'Использовано $totalTokens из $contextLimit токенов',
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(4),
+                          child: LinearProgressIndicator(
+                            key: const Key('chatTokenProgress'),
+                            value: contextProgress,
+                            minHeight: 5,
+                            backgroundColor: const Color(0xFFE1E6EF),
+                            color: contextProgress >= 0.9
+                                ? const Color(0xFFD92D20)
+                                : contextProgress >= 0.75
+                                    ? const Color(0xFFF79009)
+                                    : const Color(0xFF3659D9),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        'Использовано ${formatTokenNumber(totalTokens)} из ${formatTokenNumber(contextLimit)} токенов',
+                        key: const Key('chatTotalTokens'),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w400,
-                            color: Color(0xFF667085))),
-                    const SizedBox(height: 5),
-                    Semantics(
-                      label:
-                          'Использовано $totalTokens из $contextLimit токенов',
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(4),
-                        child: LinearProgressIndicator(
-                          key: const Key('chatTokenProgress'),
-                          value: contextProgress,
-                          minHeight: 5,
-                          backgroundColor: const Color(0xFFE1E6EF),
-                          color: contextProgress >= 0.9
-                              ? const Color(0xFFD92D20)
-                              : contextProgress >= 0.75
-                                  ? const Color(0xFFF79009)
-                                  : const Color(0xFF3659D9),
+                          fontSize: 11,
+                          fontWeight: FontWeight.w500,
+                          color: Color(0xFF667085),
                         ),
                       ),
-                    ),
-                    const SizedBox(height: 3),
-                    Text(
-                      'Использовано ${formatTokenNumber(totalTokens)} из ${formatTokenNumber(contextLimit)} токенов',
-                      key: const Key('chatTotalTokens'),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w500,
-                        color: Color(0xFF667085),
+                    ])),
+                if (wideHeader) ...[
+                  const SizedBox(width: 24),
+                  SizedBox(width: 380, child: _compressionSettings(chat)),
+                ],
+              ]),
+              bottom: wideHeader
+                  ? null
+                  : PreferredSize(
+                      preferredSize: const Size.fromHeight(82),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        child: SizedBox(
+                            height: 82, child: _compressionSettings(chat)),
                       ),
                     ),
-                  ]),
             ),
             body: SafeArea(
               child: Center(
@@ -242,24 +322,55 @@ class _ChatPageState extends State<ChatPage> {
                               controller: _scrollController,
                               padding:
                                   const EdgeInsets.fromLTRB(16, 20, 16, 12),
-                              itemCount: chat.messages.length +
+                              itemCount: historyItems +
                                   ((_generating || _streamingText.isNotEmpty)
                                       ? 1
                                       : 0),
                               itemBuilder: (context, index) {
-                                if (index == chat.messages.length) {
+                                if (index == historyItems) {
                                   return _bubble(
                                     ChatRole.assistant,
                                     _streamingText,
                                     streaming: true,
                                   );
                                 }
-                                final message = chat.messages[index];
-                                return _bubble(
+                                if (hasSummary && index == 0) {
+                                  return _summaryBlock(chat, showOriginals);
+                                }
+                                final messageIndex =
+                                    index - summaryItems + hiddenCount;
+                                final message = chat.messages[messageIndex];
+                                final summarized = hasSummary &&
+                                    messageIndex < chat.summarizedMessageCount;
+                                final bubble = _bubble(
                                   message.role,
                                   message.content,
                                   tokenCount: message.tokenCount,
+                                  summarized: summarized,
                                 );
+                                if (summarized &&
+                                    messageIndex ==
+                                        chat.summarizedMessageCount - 1) {
+                                  return Column(children: [
+                                    bubble,
+                                    const Padding(
+                                      padding: EdgeInsets.only(bottom: 16),
+                                      child: Row(children: [
+                                        Expanded(child: Divider()),
+                                        Padding(
+                                          padding: EdgeInsets.symmetric(
+                                              horizontal: 12),
+                                          child: Text('Конец сжатой переписки',
+                                              style: TextStyle(
+                                                  fontSize: 12,
+                                                  color: Color(0xFF667085))),
+                                        ),
+                                        Expanded(child: Divider()),
+                                      ]),
+                                    ),
+                                  ]);
+                                }
+                                return bubble;
                               },
                             ),
                     ),
@@ -293,6 +404,150 @@ class _ChatPageState extends State<ChatPage> {
         },
       );
 
+  Widget _summaryBlock(AgentChat chat, bool showOriginals) => Container(
+        key: const Key('chatContextSummary'),
+        margin: const EdgeInsets.only(bottom: 16),
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: const Color(0xFFEEF2FF),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: const Color(0xFFCDD5F5)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(children: [
+              const Icon(Icons.summarize_outlined, color: Color(0xFF3659D9)),
+              const SizedBox(width: 8),
+              Expanded(
+                  child: Text(
+                'Резюме переписки · ${chat.summarizedMessageCount} сообщений',
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              )),
+            ]),
+            const SizedBox(height: 10),
+            MarkdownBody(
+                data: chat.contextSummary,
+                selectable: true,
+                softLineBreak: true),
+            const SizedBox(height: 8),
+            TextButton.icon(
+              key: const Key('toggleSummarizedMessages'),
+              onPressed: () => setState(() {
+                _expandedSummaryCount =
+                    showOriginals ? null : chat.summarizedMessageCount;
+              }),
+              icon: Icon(showOriginals ? Icons.expand_less : Icons.expand_more),
+              label: Text(showOriginals
+                  ? 'Скрыть исходные сообщения'
+                  : 'Показать исходные сообщения'),
+            ),
+          ],
+        ),
+      );
+
+  Widget _compressionSettings(AgentChat chat) {
+    String? validate(String? _) {
+      if (!chat.compressionEnabled) return null;
+      final max = int.tryParse(_maxController.text);
+      final min = int.tryParse(_minController.text);
+      return max == null || min == null || min < 1 || min >= max
+          ? 'Нужно: 1 ≤ min < max'
+          : null;
+    }
+
+    void save(String _) {
+      if (!(_compressionForm.currentState?.validate() ?? false)) return;
+      widget.repository.updateCompressionSettings(chat.id,
+          enabled: chat.compressionEnabled,
+          max: int.parse(_maxController.text),
+          min: int.parse(_minController.text));
+    }
+
+    return DefaultTextStyle.merge(
+      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w400),
+      child: Form(
+        key: _compressionForm,
+        child: Row(children: [
+          Tooltip(
+            message: 'При достижении max ранняя переписка заменяется резюме. '
+                'Последние min сообщений сохраняются полностью.'
+                '${chat.contextSummary.isEmpty ? '' : '\nВ резюме: ${chat.summarizedMessageCount} сообщений.'}',
+            child: SizedBox(
+                width: 132,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(_compressing ? 'Сжимаю контекст…' : 'Сжатие контекста',
+                        style: const TextStyle(fontSize: 12)),
+                    Switch.adaptive(
+                      key: const Key('contextCompressionSwitch'),
+                      value: chat.compressionEnabled,
+                      onChanged: _generating
+                          ? null
+                          : (enabled) {
+                              _maxController.text = '${chat.compressionMax}';
+                              _minController.text = '${chat.compressionMin}';
+                              widget.repository.updateCompressionSettings(
+                                  chat.id,
+                                  enabled: enabled,
+                                  max: chat.compressionMax,
+                                  min: chat.compressionMin);
+                              WidgetsBinding.instance.addPostFrameCallback((_) {
+                                if (mounted) {
+                                  _compressionForm.currentState?.validate();
+                                }
+                              });
+                            },
+                    ),
+                  ],
+                )),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+              child: Tooltip(
+                  message: 'Количество сообщений для запуска сжатия',
+                  child: TextFormField(
+                    key: const Key('compressionMaxField'),
+                    controller: _maxController,
+                    enabled: chat.compressionEnabled && !_generating,
+                    keyboardType: TextInputType.number,
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                    style: const TextStyle(fontSize: 14),
+                    decoration: const InputDecoration(
+                        labelText: 'max',
+                        isDense: true,
+                        contentPadding:
+                            EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                        errorStyle: TextStyle(fontSize: 10)),
+                    validator: validate,
+                    onChanged: save,
+                  ))),
+          const SizedBox(width: 12),
+          Expanded(
+              child: Tooltip(
+                  message: 'Количество последних сообщений без сжатия',
+                  child: TextFormField(
+                    key: const Key('compressionMinField'),
+                    controller: _minController,
+                    enabled: chat.compressionEnabled && !_generating,
+                    keyboardType: TextInputType.number,
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                    style: const TextStyle(fontSize: 14),
+                    decoration: const InputDecoration(
+                        labelText: 'min',
+                        isDense: true,
+                        contentPadding:
+                            EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                        errorStyle: TextStyle(fontSize: 10)),
+                    validator: validate,
+                    onChanged: save,
+                  ))),
+        ]),
+      ),
+    );
+  }
+
   Widget _emptyChat(AiAgent agent) => Center(
         child: Padding(
           padding: const EdgeInsets.all(24),
@@ -315,6 +570,7 @@ class _ChatPageState extends State<ChatPage> {
     ChatRole role,
     String content, {
     bool streaming = false,
+    bool summarized = false,
     int? tokenCount,
   }) {
     final isUser = role == ChatRole.user;
@@ -326,26 +582,50 @@ class _ChatPageState extends State<ChatPage> {
         margin: const EdgeInsets.only(bottom: 12),
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         decoration: BoxDecoration(
-          color: isUser ? const Color(0xFF3659D9) : Colors.white,
+          color: summarized
+              ? const Color(0xFFF0F2F5)
+              : isUser
+                  ? const Color(0xFF3659D9)
+                  : Colors.white,
           borderRadius: BorderRadius.circular(16),
-          border: isUser ? null : Border.all(color: const Color(0xFFE1E6EF)),
+          border: summarized
+              ? Border.all(color: const Color(0xFFCBD2DC))
+              : isUser
+                  ? null
+                  : Border.all(color: const Color(0xFFE1E6EF)),
         ),
         child: streaming && content.isEmpty
-            ? const Row(mainAxisSize: MainAxisSize.min, children: [
-                SizedBox(
+            ? Row(mainAxisSize: MainAxisSize.min, children: [
+                const SizedBox(
                     width: 16,
                     height: 16,
                     child: CircularProgressIndicator(strokeWidth: 2)),
-                SizedBox(width: 10),
-                Text('Генерирую ответ…'),
+                const SizedBox(width: 10),
+                Text(_compressing ? 'Сжимаю контекст…' : 'Генерирую ответ…'),
               ])
             : Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  if (summarized) ...[
+                    const Row(mainAxisSize: MainAxisSize.min, children: [
+                      Icon(Icons.inventory_2_outlined,
+                          size: 14, color: Color(0xFF667085)),
+                      SizedBox(width: 6),
+                      Text('Включено в резюме',
+                          style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                              color: Color(0xFF667085))),
+                    ]),
+                    const SizedBox(height: 8),
+                  ],
                   if (isUser)
                     SelectableText(content,
-                        style:
-                            const TextStyle(color: Colors.white, height: 1.45))
+                        style: TextStyle(
+                            color: summarized
+                                ? const Color(0xFF344054)
+                                : Colors.white,
+                            height: 1.45))
                   else
                     MarkdownBody(
                       data: content,
@@ -364,9 +644,11 @@ class _ChatPageState extends State<ChatPage> {
                     formatTokenCount(displayedTokens),
                     key: streaming ? const Key('streamingMessageTokens') : null,
                     style: TextStyle(
-                      color: isUser
-                          ? Colors.white.withValues(alpha: 0.72)
-                          : const Color(0xFF98A2B3),
+                      color: summarized
+                          ? const Color(0xFF667085)
+                          : isUser
+                              ? Colors.white.withValues(alpha: 0.72)
+                              : const Color(0xFF98A2B3),
                       fontSize: 11,
                       fontWeight: FontWeight.w500,
                     ),

@@ -136,6 +136,11 @@ class AgentChat {
     required this.messages,
     required this.createdAt,
     required this.lastActivityAt,
+    this.compressionEnabled = false,
+    this.compressionMax = 20,
+    this.compressionMin = 6,
+    this.contextSummary = '',
+    this.summarizedMessageCount = 0,
   });
 
   final String id;
@@ -144,11 +149,27 @@ class AgentChat {
   final List<ChatMessage> messages;
   final DateTime createdAt;
   final DateTime lastActivityAt;
+  final bool compressionEnabled;
+  final int compressionMax;
+  final int compressionMin;
+  final String contextSummary;
+  final int summarizedMessageCount;
+
+  List<ChatMessage> get contextMessages => compressionEnabled
+      ? messages.skip(summarizedMessageCount).toList(growable: false)
+      : messages;
+
+  String get activeSummary => compressionEnabled ? contextSummary : '';
 
   AgentChat copyWith({
     String? title,
     List<ChatMessage>? messages,
     DateTime? lastActivityAt,
+    bool? compressionEnabled,
+    int? compressionMax,
+    int? compressionMin,
+    String? contextSummary,
+    int? summarizedMessageCount,
   }) =>
       AgentChat(
         id: id,
@@ -157,6 +178,12 @@ class AgentChat {
         messages: messages ?? this.messages,
         createdAt: createdAt,
         lastActivityAt: lastActivityAt ?? this.lastActivityAt,
+        compressionEnabled: compressionEnabled ?? this.compressionEnabled,
+        compressionMax: compressionMax ?? this.compressionMax,
+        compressionMin: compressionMin ?? this.compressionMin,
+        contextSummary: contextSummary ?? this.contextSummary,
+        summarizedMessageCount:
+            summarizedMessageCount ?? this.summarizedMessageCount,
       );
 
   Map<String, Object> toJson() => {
@@ -166,6 +193,11 @@ class AgentChat {
         'messages': messages.map((message) => message.toJson()).toList(),
         'createdAt': createdAt.toIso8601String(),
         'lastActivityAt': lastActivityAt.toIso8601String(),
+        'compressionEnabled': compressionEnabled,
+        'compressionMax': compressionMax,
+        'compressionMin': compressionMin,
+        'contextSummary': contextSummary,
+        'summarizedMessageCount': summarizedMessageCount,
       };
 
   factory AgentChat.fromJson(Map<String, dynamic> json) => AgentChat(
@@ -177,5 +209,10 @@ class AgentChat {
             .toList(growable: false),
         createdAt: DateTime.parse(json['createdAt'] as String),
         lastActivityAt: DateTime.parse(json['lastActivityAt'] as String),
+        compressionEnabled: json['compressionEnabled'] as bool? ?? false,
+        compressionMax: json['compressionMax'] as int? ?? 20,
+        compressionMin: json['compressionMin'] as int? ?? 6,
+        contextSummary: json['contextSummary'] as String? ?? '',
+        summarizedMessageCount: json['summarizedMessageCount'] as int? ?? 0,
       );
 }
