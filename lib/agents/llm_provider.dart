@@ -6,11 +6,16 @@ import 'package:http/http.dart' as http;
 import 'models.dart';
 
 class LlmRequest {
-  const LlmRequest(
-      {required this.agent, required this.messages, this.summary = ''});
+  const LlmRequest({
+    required this.agent,
+    required this.messages,
+    this.summary = '',
+    this.facts = const {},
+  });
   final AiAgent agent;
   final List<ChatMessage> messages;
   final String summary;
+  final Map<String, String> facts;
 }
 
 sealed class LlmEvent {
@@ -81,6 +86,7 @@ class BackendLlmProvider implements LlmProvider {
                     .toList(),
                 if (request.summary.isNotEmpty)
                   'contextSummary': request.summary,
+                if (request.facts.isNotEmpty) 'contextFacts': request.facts,
               });
         final response = await client.send(httpRequest).timeout(
               const Duration(seconds: 30),

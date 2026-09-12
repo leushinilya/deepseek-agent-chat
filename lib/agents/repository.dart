@@ -156,6 +156,13 @@ class AgentChatRepository extends ChangeNotifier {
     _chats[index] = chat.copyWith(
       title: title,
       messages: [...chat.messages, message],
+      branches: chat.activeBranchId == null
+          ? chat.branches
+          : chat.branches
+              .map((branch) => branch.id == chat.activeBranchId
+                  ? branch.copyWith(messages: [...branch.messages, message])
+                  : branch)
+              .toList(growable: false),
       lastActivityAt: now,
     );
     _changed();
@@ -184,9 +191,86 @@ class AgentChatRepository extends ChangeNotifier {
       throw StateError('Дождитесь завершения сжатия.');
     }
     _chats[index] = _chats[index].copyWith(
-      compressionEnabled: enabled,
+      contextStrategy:
+          enabled ? ContextStrategy.compression : ContextStrategy.fullHistory,
       compressionMax: max,
       compressionMin: min,
+    );
+    _changed();
+  }
+
+  void updateContextStrategy(String chatId, ContextStrategy strategy) {
+    final index = _chats.indexWhere((chat) => chat.id == chatId);
+    if (index < 0) throw StateError('Chat not found');
+    if (_compressingChats.contains(chatId)) {
+      throw StateError('Дождитесь завершения обработки контекста.');
+    }
+    _chats[index] = _chats[index].copyWith(contextStrategy: strategy);
+    _changed();
+  }
+
+  void updateWindowSize(String chatId, int size) {
+    if (size < 1 || size > 200) {
+      throw ArgumentError('Размер окна должен быть от 1 до 200.');
+    }
+    final index = _chats.indexWhere((chat) => chat.id == chatId);
+    if (index < 0) throw StateError('Chat not found');
+    _chats[index] = _chats[index].copyWith(windowSize: size);
+    _changed();
+  }
+
+  void saveFacts(String chatId, Map<String, String> facts) {
+    final index = _chats.indexWhere((chat) => chat.id == chatId);
+    if (index < 0) throw StateError('Chat not found');
+    final cleaned = <String, String>{};
+    for (final entry in facts.entries) {
+      final key = entry.key.trim();
+      final value = entry.value.trim();
+      if (key.isNotEmpty && value.isNotEmpty) cleaned[key] = value;
+    }
+    _chats[index] = _chats[index].copyWith(facts: cleaned);
+    _changed();
+  }
+
+  void createBranches(String chatId) {
+    final index = _chats.indexWhere((chat) => chat.id == chatId);
+    if (index < 0) throw StateError('Chat not found');
+    final chat = _chats[index];
+    if (chat.branches.isNotEmpty) {
+      throw StateError('Ветки уже созданы.');
+    }
+    final firstId = _id('branch');
+    final secondId = _id('branch');
+    final snapshot = List<ChatMessage>.of(chat.messages, growable: false);
+    _chats[index] = chat.copyWith(
+      contextStrategy: ContextStrategy.branching,
+      branches: [
+        ChatBranch(id: firstId, name: 'Ветка A', messages: snapshot),
+        ChatBranch(id: secondId, name: 'Ветка B', messages: snapshot),
+      ],
+      activeBranchId: firstId,
+      checkpointMessageCount: snapshot.length,
+    );
+    _changed();
+  }
+
+  void switchBranch(String chatId, String branchId) {
+    final index = _chats.indexWhere((chat) => chat.id == chatId);
+    if (index < 0) throw StateError('Chat not found');
+    final chat = _chats[index];
+    ChatBranch? branch;
+    for (final item in chat.branches) {
+      if (item.id == branchId) {
+        branch = item;
+        break;
+      }
+    }
+    if (branch == null) throw StateError('Branch not found');
+    _chats[index] = chat.copyWith(
+      contextStrategy: ContextStrategy.branching,
+      activeBranchId: branchId,
+      messages: List<ChatMessage>.of(branch.messages, growable: false),
+      lastActivityAt: _clock(),
     );
     _changed();
   }

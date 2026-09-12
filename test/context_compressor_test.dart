@@ -125,7 +125,13 @@ void main() {
       ..remove('compressionMax')
       ..remove('compressionMin')
       ..remove('contextSummary')
-      ..remove('summarizedMessageCount');
+      ..remove('summarizedMessageCount')
+      ..remove('contextStrategy')
+      ..remove('windowSize')
+      ..remove('facts')
+      ..remove('branches')
+      ..remove('activeBranchId')
+      ..remove('checkpointMessageCount');
     final chat = AgentChat.fromJson(json);
     expect(chat.compressionEnabled, isFalse);
     expect(chat.compressionMax, 20);

@@ -96,6 +96,21 @@ class AiAgent {
 
 enum ChatRole { user, assistant }
 
+enum ContextStrategy {
+  fullHistory,
+  compression,
+  slidingWindow,
+  stickyFacts,
+  branching;
+
+  static ContextStrategy fromName(String? name) {
+    for (final value in values) {
+      if (value.name == name) return value;
+    }
+    return ContextStrategy.fullHistory;
+  }
+}
+
 class ChatMessage {
   const ChatMessage({
     required this.id,
@@ -128,6 +143,39 @@ class ChatMessage {
       );
 }
 
+class ChatBranch {
+  const ChatBranch({
+    required this.id,
+    required this.name,
+    required this.messages,
+  });
+
+  final String id;
+  final String name;
+  final List<ChatMessage> messages;
+
+  ChatBranch copyWith({String? name, List<ChatMessage>? messages}) =>
+      ChatBranch(
+        id: id,
+        name: name ?? this.name,
+        messages: messages ?? this.messages,
+      );
+
+  Map<String, Object> toJson() => {
+        'id': id,
+        'name': name,
+        'messages': messages.map((message) => message.toJson()).toList(),
+      };
+
+  factory ChatBranch.fromJson(Map<String, dynamic> json) => ChatBranch(
+        id: json['id'] as String,
+        name: json['name'] as String,
+        messages: (json['messages'] as List<dynamic>? ?? const [])
+            .map((value) => ChatMessage.fromJson(value as Map<String, dynamic>))
+            .toList(growable: false),
+      );
+}
+
 class AgentChat {
   const AgentChat({
     required this.id,
@@ -136,11 +184,16 @@ class AgentChat {
     required this.messages,
     required this.createdAt,
     required this.lastActivityAt,
-    this.compressionEnabled = false,
     this.compressionMax = 20,
     this.compressionMin = 6,
     this.contextSummary = '',
     this.summarizedMessageCount = 0,
+    this.contextStrategy = ContextStrategy.fullHistory,
+    this.windowSize = 12,
+    this.facts = const {},
+    this.branches = const [],
+    this.activeBranchId,
+    this.checkpointMessageCount,
   });
 
   final String id;
@@ -149,27 +202,58 @@ class AgentChat {
   final List<ChatMessage> messages;
   final DateTime createdAt;
   final DateTime lastActivityAt;
-  final bool compressionEnabled;
+  bool get compressionEnabled => contextStrategy == ContextStrategy.compression;
   final int compressionMax;
   final int compressionMin;
   final String contextSummary;
   final int summarizedMessageCount;
 
-  List<ChatMessage> get contextMessages => compressionEnabled
-      ? messages.skip(summarizedMessageCount).toList(growable: false)
-      : messages;
+  final ContextStrategy contextStrategy;
+  final int windowSize;
+  final Map<String, String> facts;
+  final List<ChatBranch> branches;
+  final String? activeBranchId;
+  final int? checkpointMessageCount;
 
-  String get activeSummary => compressionEnabled ? contextSummary : '';
+  List<ChatMessage> get contextMessages {
+    switch (contextStrategy) {
+      case ContextStrategy.compression:
+        return messages.skip(summarizedMessageCount).toList(growable: false);
+      case ContextStrategy.slidingWindow:
+      case ContextStrategy.stickyFacts:
+        final start =
+            messages.length > windowSize ? messages.length - windowSize : 0;
+        return messages.sublist(start);
+      case ContextStrategy.fullHistory:
+      case ContextStrategy.branching:
+        return messages;
+    }
+  }
+
+  String get activeSummary {
+    if (contextStrategy == ContextStrategy.compression) return contextSummary;
+    if (contextStrategy == ContextStrategy.stickyFacts && facts.isNotEmpty) {
+      return facts.entries
+          .map((entry) => '${entry.key}: ${entry.value}')
+          .join('\n');
+    }
+    return '';
+  }
 
   AgentChat copyWith({
     String? title,
     List<ChatMessage>? messages,
     DateTime? lastActivityAt,
-    bool? compressionEnabled,
     int? compressionMax,
     int? compressionMin,
     String? contextSummary,
     int? summarizedMessageCount,
+    ContextStrategy? contextStrategy,
+    int? windowSize,
+    Map<String, String>? facts,
+    List<ChatBranch>? branches,
+    String? activeBranchId,
+    int? checkpointMessageCount,
   }) =>
       AgentChat(
         id: id,
@@ -178,12 +262,18 @@ class AgentChat {
         messages: messages ?? this.messages,
         createdAt: createdAt,
         lastActivityAt: lastActivityAt ?? this.lastActivityAt,
-        compressionEnabled: compressionEnabled ?? this.compressionEnabled,
         compressionMax: compressionMax ?? this.compressionMax,
         compressionMin: compressionMin ?? this.compressionMin,
         contextSummary: contextSummary ?? this.contextSummary,
         summarizedMessageCount:
             summarizedMessageCount ?? this.summarizedMessageCount,
+        contextStrategy: contextStrategy ?? this.contextStrategy,
+        windowSize: windowSize ?? this.windowSize,
+        facts: facts ?? this.facts,
+        branches: branches ?? this.branches,
+        activeBranchId: activeBranchId ?? this.activeBranchId,
+        checkpointMessageCount:
+            checkpointMessageCount ?? this.checkpointMessageCount,
       );
 
   Map<String, Object> toJson() => {
@@ -198,6 +288,13 @@ class AgentChat {
         'compressionMin': compressionMin,
         'contextSummary': contextSummary,
         'summarizedMessageCount': summarizedMessageCount,
+        'contextStrategy': contextStrategy.name,
+        'windowSize': windowSize,
+        'facts': facts,
+        'branches': branches.map((branch) => branch.toJson()).toList(),
+        if (activeBranchId != null) 'activeBranchId': activeBranchId!,
+        if (checkpointMessageCount != null)
+          'checkpointMessageCount': checkpointMessageCount!,
       };
 
   factory AgentChat.fromJson(Map<String, dynamic> json) => AgentChat(
@@ -209,10 +306,22 @@ class AgentChat {
             .toList(growable: false),
         createdAt: DateTime.parse(json['createdAt'] as String),
         lastActivityAt: DateTime.parse(json['lastActivityAt'] as String),
-        compressionEnabled: json['compressionEnabled'] as bool? ?? false,
         compressionMax: json['compressionMax'] as int? ?? 20,
         compressionMin: json['compressionMin'] as int? ?? 6,
         contextSummary: json['contextSummary'] as String? ?? '',
         summarizedMessageCount: json['summarizedMessageCount'] as int? ?? 0,
+        contextStrategy: json.containsKey('contextStrategy')
+            ? ContextStrategy.fromName(json['contextStrategy'] as String?)
+            : (json['compressionEnabled'] as bool? ?? false)
+                ? ContextStrategy.compression
+                : ContextStrategy.fullHistory,
+        windowSize: json['windowSize'] as int? ?? 12,
+        facts: (json['facts'] as Map<String, dynamic>? ?? const {})
+            .map((key, value) => MapEntry(key, value.toString())),
+        branches: (json['branches'] as List<dynamic>? ?? const [])
+            .map((value) => ChatBranch.fromJson(value as Map<String, dynamic>))
+            .toList(growable: false),
+        activeBranchId: json['activeBranchId'] as String?,
+        checkpointMessageCount: json['checkpointMessageCount'] as int?,
       );
 }

@@ -62,13 +62,13 @@ void main() {
     await tester.pumpWidget(MaterialApp(
         home: ChatPage(
             repository: repository, chatId: chat.id, provider: provider)));
-    expect(
-        tester
-            .widget<TextFormField>(find.byKey(const Key('compressionMaxField')))
-            .enabled,
-        isFalse);
-    await tester.tap(find.byKey(const Key('contextCompressionSwitch')));
-    await tester.pump();
+    expect(find.byKey(const Key('compressionMaxField')), findsNothing);
+    await tester.tap(find.byKey(const Key('contextStrategyDropdown')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Compression').last);
+    await tester.pumpAndSettle();
+    expect(repository.chatById(chat.id)!.contextStrategy,
+        ContextStrategy.compression);
     await tester.enterText(find.byKey(const Key('compressionMinField')), '1');
     await tester.enterText(find.byKey(const Key('compressionMaxField')), '1');
     await tester.pump();
@@ -130,6 +130,111 @@ void main() {
 
     expect(provider.operation.cancelled, isTrue);
     expect(find.byKey(const Key('sendMessageButton')), findsOneWidget);
+  });
+
+  testWidgets('switches context strategies and creates two branches',
+      (tester) async {
+    await tester.pumpWidget(MaterialApp(
+      home:
+          ChatPage(repository: repository, chatId: chat.id, provider: provider),
+    ));
+
+    await tester.tap(find.byKey(const Key('contextStrategyDropdown')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Sliding Window').last);
+    await tester.pumpAndSettle();
+    expect(repository.chatById(chat.id)!.contextStrategy,
+        ContextStrategy.slidingWindow);
+    expect(find.byKey(const Key('contextWindowSizeField')), findsOneWidget);
+    await tester.enterText(
+        find.byKey(const Key('contextWindowSizeField')), '4');
+    expect(repository.chatById(chat.id)!.windowSize, 4);
+
+    await tester.tap(find.byKey(const Key('contextStrategyDropdown')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Branching').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('createBranchesButton')));
+    await tester.pumpAndSettle();
+    final branched = repository.chatById(chat.id)!;
+    expect(branched.branches, hasLength(2));
+    expect(find.byKey(const Key('activeBranchDropdown')), findsOneWidget);
+  });
+
+  testWidgets('sliding window collapses and expands unused history',
+      (tester) async {
+    for (var i = 0; i < 5; i++) {
+      repository.appendMessage(
+        chat.id,
+        i.isEven ? ChatRole.user : ChatRole.assistant,
+        'Window message $i',
+      );
+    }
+    repository.updateWindowSize(chat.id, 2);
+    repository.updateContextStrategy(chat.id, ContextStrategy.slidingWindow);
+    await tester.pumpWidget(MaterialApp(
+      home:
+          ChatPage(repository: repository, chatId: chat.id, provider: provider),
+    ));
+
+    expect(find.byKey(const Key('chatSlidingWindowSummary')), findsOneWidget);
+    final firstBubble = find.byWidgetPredicate((widget) =>
+        widget is SelectableText && widget.data == 'Window message 0');
+    expect(firstBubble, findsNothing);
+    expect(find.text('Window message 3'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('toggleSlidingWindowMessages')));
+    await tester.pumpAndSettle();
+    expect(firstBubble, findsOneWidget);
+    expect(find.text('Не входит в Sliding Window'), findsNWidgets(3));
+    expect(find.text('Конец неиспользуемой истории'), findsOneWidget);
+  });
+
+  testWidgets('sticky facts renders a separate card on the right',
+      (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    repository.saveFacts(chat.id, {
+      'goal': 'Релиз в пятницу',
+      'tone': 'Кратко',
+    });
+    repository.updateContextStrategy(chat.id, ContextStrategy.stickyFacts);
+    await tester.pumpWidget(MaterialApp(
+      home:
+          ChatPage(repository: repository, chatId: chat.id, provider: provider),
+    ));
+
+    final facts = find.byKey(const Key('chatFactsBlock'));
+    final composer = find.byKey(const Key('chatMessageField'));
+    expect(facts, findsOneWidget);
+    expect(find.text('Релиз в пятницу'), findsOneWidget);
+    expect(tester.getTopLeft(facts).dx,
+        greaterThan(tester.getTopLeft(composer).dx));
+  });
+
+  testWidgets('selecting sticky facts backfills an existing conversation',
+      (tester) async {
+    repository.appendMessage(chat.id, ChatRole.user, 'Меня зовут Алексей');
+    repository.appendMessage(
+        chat.id, ChatRole.assistant, 'Приятно познакомиться');
+    await tester.pumpWidget(MaterialApp(
+      home:
+          ChatPage(repository: repository, chatId: chat.id, provider: provider),
+    ));
+
+    await tester.tap(find.byKey(const Key('contextStrategyDropdown')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Sticky Facts').last);
+    await tester.pump();
+    expect(provider.requests, hasLength(1));
+    expect(find.text('Обновляю facts…'), findsOneWidget);
+    provider.operation.controller.add(const LlmTextDelta('{"name":"Алексей"}'));
+    provider.operation.controller.add(const LlmDone());
+    await tester.pumpAndSettle();
+
+    expect(repository.chatById(chat.id)!.facts, {'name': 'Алексей'});
+    expect(find.text('Алексей'), findsOneWidget);
+    expect(find.byKey(const Key('refreshFactsButton')), findsOneWidget);
+    unawaited(provider.operation.controller.close());
   });
 }
 

@@ -7,6 +7,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../agents/llm_provider.dart';
 import '../agents/context_compressor.dart';
+import '../agents/facts_updater.dart';
 import '../agents/models.dart';
 import '../agents/repository.dart';
 import '../agents/token_counter.dart';
@@ -39,11 +40,14 @@ class _ChatPageState extends State<ChatPage> {
   bool _finalized = false;
   int? _completionTokens;
   ContextCompressor? _compressor;
+  FactsUpdater? _factsUpdater;
   bool _compressing = false;
   int? _expandedSummaryCount;
+  int? _expandedWindowCount;
   final _compressionForm = GlobalKey<FormState>();
   late final TextEditingController _maxController;
   late final TextEditingController _minController;
+  late final TextEditingController _windowController;
 
   @override
   void initState() {
@@ -53,13 +57,17 @@ class _ChatPageState extends State<ChatPage> {
         TextEditingController(text: '${chat?.compressionMax ?? 20}');
     _minController =
         TextEditingController(text: '${chat?.compressionMin ?? 6}');
+    _windowController =
+        TextEditingController(text: '${chat?.windowSize ?? 12}');
   }
 
   @override
   void dispose() {
     _maxController.dispose();
     _minController.dispose();
+    _windowController.dispose();
     _compressor?.cancel();
+    _factsUpdater?.cancel();
     _operation?.cancel();
     _subscription?.cancel();
     _controller.dispose();
@@ -118,13 +126,38 @@ class _ChatPageState extends State<ChatPage> {
       }
       if (!mounted) return;
     }
+    if (updatedChat.contextStrategy == ContextStrategy.stickyFacts) {
+      setState(() => _compressing = true);
+      final updater = FactsUpdater(widget.repository, widget.provider);
+      _factsUpdater = updater;
+      try {
+        await updater.update(updatedChat, agent);
+      } catch (error) {
+        if (!mounted) return;
+        setState(() {
+          _generating = false;
+          _error = 'Не удалось обновить facts. История сохранена. '
+              '${error is LlmException ? error.message : 'Попробуйте ещё раз.'}';
+        });
+        return;
+      } finally {
+        _factsUpdater = null;
+        if (mounted) setState(() => _compressing = false);
+      }
+      if (!mounted) return;
+    }
     final contextChat = widget.repository.chatById(widget.chatId);
     if (contextChat == null || !mounted) return;
     final operation = widget.provider.send(
       LlmRequest(
           agent: agent,
           messages: contextChat.contextMessages,
-          summary: contextChat.activeSummary),
+          summary: contextChat.contextStrategy == ContextStrategy.compression
+              ? contextChat.contextSummary
+              : '',
+          facts: contextChat.contextStrategy == ContextStrategy.stickyFacts
+              ? contextChat.facts
+              : const {}),
     );
     _operation = operation;
     _subscription = operation.events.listen(
@@ -177,11 +210,55 @@ class _ChatPageState extends State<ChatPage> {
   void _stop() {
     if (_compressing) {
       _compressor?.cancel();
+      _factsUpdater?.cancel();
       return;
     }
     _operation?.cancel();
     _subscription?.cancel();
     _finish();
+  }
+
+  Future<void> _refreshFacts({bool rebuild = true}) async {
+    if (_generating) return;
+    final chat = widget.repository.chatById(widget.chatId);
+    final agent =
+        chat == null ? null : widget.repository.agentById(chat.agentId);
+    if (chat == null || agent == null) return;
+    if (!chat.messages.any((message) => message.role == ChatRole.user)) return;
+    setState(() {
+      _generating = true;
+      _compressing = true;
+      _error = null;
+    });
+    final updater = FactsUpdater(widget.repository, widget.provider);
+    _factsUpdater = updater;
+    try {
+      await updater.update(chat, agent, rebuild: rebuild);
+    } catch (error) {
+      if (mounted) {
+        setState(() => _error = error is LlmException
+            ? error.message
+            : 'Не удалось обновить facts.');
+      }
+    } finally {
+      _factsUpdater = null;
+      if (mounted) {
+        setState(() {
+          _generating = false;
+          _compressing = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _selectContextStrategy(
+      AgentChat chat, ContextStrategy strategy) async {
+    widget.repository.updateContextStrategy(chat.id, strategy);
+    if (strategy == ContextStrategy.stickyFacts &&
+        chat.facts.isEmpty &&
+        chat.messages.any((message) => message.role == ChatRole.user)) {
+      await _refreshFacts();
+    }
   }
 
   void _scrollToEnd() {
@@ -238,13 +315,27 @@ class _ChatPageState extends State<ChatPage> {
           final hasSummary = chat.compressionEnabled &&
               chat.contextSummary.isNotEmpty &&
               chat.summarizedMessageCount > 0;
+          final stickyFactsActive =
+              chat.contextStrategy == ContextStrategy.stickyFacts;
+          final slidingExcludedCount =
+              chat.contextStrategy == ContextStrategy.slidingWindow &&
+                      chat.messages.length > chat.windowSize
+                  ? chat.messages.length - chat.windowSize
+                  : 0;
+          final hasSlidingHistory = slidingExcludedCount > 0;
           final showOriginals =
               _expandedSummaryCount == chat.summarizedMessageCount;
-          final hiddenCount =
-              hasSummary && !showOriginals ? chat.summarizedMessageCount : 0;
+          final showUnusedWindow = _expandedWindowCount == slidingExcludedCount;
+          final hiddenCount = hasSummary && !showOriginals
+              ? chat.summarizedMessageCount
+              : hasSlidingHistory && !showUnusedWindow
+                  ? slidingExcludedCount
+                  : 0;
           final summaryItems = hasSummary ? 1 : 0;
+          final windowItems = hasSlidingHistory ? 1 : 0;
+          final contextItems = summaryItems + windowItems;
           final historyItems =
-              chat.messages.length - hiddenCount + summaryItems;
+              chat.messages.length - hiddenCount + contextItems;
           return Scaffold(
             appBar: AppBar(
               toolbarHeight: 92,
@@ -296,7 +387,7 @@ class _ChatPageState extends State<ChatPage> {
                     ])),
                 if (wideHeader) ...[
                   const SizedBox(width: 24),
-                  SizedBox(width: 380, child: _compressionSettings(chat)),
+                  SizedBox(width: 460, child: _contextSettings(chat)),
                 ],
               ]),
               bottom: wideHeader
@@ -305,103 +396,307 @@ class _ChatPageState extends State<ChatPage> {
                       preferredSize: const Size.fromHeight(82),
                       child: Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 16),
-                        child: SizedBox(
-                            height: 82, child: _compressionSettings(chat)),
+                        child:
+                            SizedBox(height: 82, child: _contextSettings(chat)),
                       ),
                     ),
             ),
             body: SafeArea(
-              child: Center(
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 920),
-                  child: Column(children: [
-                    Expanded(
-                      child: chat.messages.isEmpty && !_generating
-                          ? _emptyChat(agent)
-                          : ListView.builder(
-                              controller: _scrollController,
-                              padding:
-                                  const EdgeInsets.fromLTRB(16, 20, 16, 12),
-                              itemCount: historyItems +
-                                  ((_generating || _streamingText.isNotEmpty)
-                                      ? 1
-                                      : 0),
-                              itemBuilder: (context, index) {
-                                if (index == historyItems) {
-                                  return _bubble(
-                                    ChatRole.assistant,
-                                    _streamingText,
-                                    streaming: true,
-                                  );
-                                }
-                                if (hasSummary && index == 0) {
-                                  return _summaryBlock(chat, showOriginals);
-                                }
-                                final messageIndex =
-                                    index - summaryItems + hiddenCount;
-                                final message = chat.messages[messageIndex];
-                                final summarized = hasSummary &&
-                                    messageIndex < chat.summarizedMessageCount;
-                                final bubble = _bubble(
-                                  message.role,
-                                  message.content,
-                                  tokenCount: message.tokenCount,
-                                  summarized: summarized,
-                                );
-                                if (summarized &&
-                                    messageIndex ==
-                                        chat.summarizedMessageCount - 1) {
-                                  return Column(children: [
-                                    bubble,
-                                    const Padding(
-                                      padding: EdgeInsets.only(bottom: 16),
-                                      child: Row(children: [
-                                        Expanded(child: Divider()),
-                                        Padding(
-                                          padding: EdgeInsets.symmetric(
-                                              horizontal: 12),
-                                          child: Text('Конец сжатой переписки',
-                                              style: TextStyle(
-                                                  fontSize: 12,
-                                                  color: Color(0xFF667085))),
-                                        ),
-                                        Expanded(child: Divider()),
-                                      ]),
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final factsOnRight =
+                      stickyFactsActive && constraints.maxWidth >= 1000;
+                  return Center(
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(
+                          maxWidth: stickyFactsActive ? 1240 : 920),
+                      child: Row(children: [
+                        Expanded(
+                          child: Column(children: [
+                            if (stickyFactsActive && !factsOnRight)
+                              Padding(
+                                padding:
+                                    const EdgeInsets.fromLTRB(16, 16, 16, 0),
+                                child: _factsBlock(chat),
+                              ),
+                            Expanded(
+                              child: chat.messages.isEmpty && !_generating
+                                  ? _emptyChat(agent)
+                                  : ListView.builder(
+                                      controller: _scrollController,
+                                      padding: const EdgeInsets.fromLTRB(
+                                          16, 20, 16, 12),
+                                      itemCount: historyItems +
+                                          ((_generating ||
+                                                  _streamingText.isNotEmpty)
+                                              ? 1
+                                              : 0),
+                                      itemBuilder: (context, index) {
+                                        if (index == historyItems) {
+                                          return _bubble(
+                                            ChatRole.assistant,
+                                            _streamingText,
+                                            streaming: true,
+                                          );
+                                        }
+                                        if (hasSummary && index == 0) {
+                                          return _summaryBlock(
+                                              chat, showOriginals);
+                                        }
+                                        if (hasSlidingHistory && index == 0) {
+                                          return _slidingWindowBlock(
+                                              slidingExcludedCount,
+                                              showUnusedWindow);
+                                        }
+                                        final messageIndex =
+                                            index - contextItems + hiddenCount;
+                                        final message =
+                                            chat.messages[messageIndex];
+                                        final summarized = hasSummary &&
+                                            messageIndex <
+                                                chat.summarizedMessageCount;
+                                        final outsideWindow =
+                                            hasSlidingHistory &&
+                                                showUnusedWindow &&
+                                                messageIndex <
+                                                    slidingExcludedCount;
+                                        final bubble = _bubble(
+                                          message.role,
+                                          message.content,
+                                          tokenCount: message.tokenCount,
+                                          summarized:
+                                              summarized || outsideWindow,
+                                          contextLabel: outsideWindow
+                                              ? 'Не входит в Sliding Window'
+                                              : null,
+                                        );
+                                        if (summarized &&
+                                            messageIndex ==
+                                                chat.summarizedMessageCount -
+                                                    1) {
+                                          return Column(children: [
+                                            bubble,
+                                            const Padding(
+                                              padding:
+                                                  EdgeInsets.only(bottom: 16),
+                                              child: Row(children: [
+                                                Expanded(child: Divider()),
+                                                Padding(
+                                                  padding: EdgeInsets.symmetric(
+                                                      horizontal: 12),
+                                                  child: Text(
+                                                      'Конец сжатой переписки',
+                                                      style: TextStyle(
+                                                          fontSize: 12,
+                                                          color: Color(
+                                                              0xFF667085))),
+                                                ),
+                                                Expanded(child: Divider()),
+                                              ]),
+                                            ),
+                                          ]);
+                                        }
+                                        if (outsideWindow &&
+                                            messageIndex ==
+                                                slidingExcludedCount - 1) {
+                                          return Column(children: [
+                                            bubble,
+                                            const Padding(
+                                              padding:
+                                                  EdgeInsets.only(bottom: 16),
+                                              child: Row(children: [
+                                                Expanded(child: Divider()),
+                                                Padding(
+                                                  padding: EdgeInsets.symmetric(
+                                                      horizontal: 12),
+                                                  child: Text(
+                                                      'Конец неиспользуемой истории',
+                                                      style: TextStyle(
+                                                          fontSize: 12,
+                                                          color: Color(
+                                                              0xFF667085))),
+                                                ),
+                                                Expanded(child: Divider()),
+                                              ]),
+                                            ),
+                                          ]);
+                                        }
+                                        if (chat.contextStrategy ==
+                                                ContextStrategy.branching &&
+                                            chat.checkpointMessageCount !=
+                                                null &&
+                                            messageIndex ==
+                                                chat.checkpointMessageCount! -
+                                                    1) {
+                                          return Column(children: [
+                                            bubble,
+                                            const Padding(
+                                              padding:
+                                                  EdgeInsets.only(bottom: 16),
+                                              child: Row(children: [
+                                                Expanded(child: Divider()),
+                                                Padding(
+                                                  padding: EdgeInsets.symmetric(
+                                                      horizontal: 12),
+                                                  child: Text(
+                                                      'Checkpoint веток',
+                                                      style: TextStyle(
+                                                          fontSize: 12,
+                                                          color: Color(
+                                                              0xFF667085))),
+                                                ),
+                                                Expanded(child: Divider()),
+                                              ]),
+                                            ),
+                                          ]);
+                                        }
+                                        return bubble;
+                                      },
                                     ),
-                                  ]);
-                                }
-                                return bubble;
-                              },
                             ),
-                    ),
-                    if (_error != null)
-                      Container(
-                        margin: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFFFF1F0),
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: const Color(0xFFFDA29B)),
+                            if (_error != null)
+                              Container(
+                                margin: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFFFF1F0),
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(
+                                      color: const Color(0xFFFDA29B)),
+                                ),
+                                child: Row(children: [
+                                  const Icon(Icons.error_outline,
+                                      color: Color(0xFFB42318)),
+                                  const SizedBox(width: 10),
+                                  Expanded(child: Text(_error!)),
+                                  TextButton(
+                                    key: const Key('retryMessageButton'),
+                                    onPressed: () =>
+                                        _send(addUserMessage: false),
+                                    child: const Text('Повторить'),
+                                  ),
+                                ]),
+                              ),
+                            _composer(),
+                          ]),
                         ),
-                        child: Row(children: [
-                          const Icon(Icons.error_outline,
-                              color: Color(0xFFB42318)),
-                          const SizedBox(width: 10),
-                          Expanded(child: Text(_error!)),
-                          TextButton(
-                            key: const Key('retryMessageButton'),
-                            onPressed: () => _send(addUserMessage: false),
-                            child: const Text('Повторить'),
+                        if (factsOnRight) ...[
+                          const SizedBox(width: 20),
+                          SizedBox(
+                            width: 300,
+                            child: Align(
+                              alignment: Alignment.topCenter,
+                              child: Padding(
+                                padding:
+                                    const EdgeInsets.only(top: 20, right: 16),
+                                child: _factsBlock(chat),
+                              ),
+                            ),
                           ),
-                        ]),
-                      ),
-                    _composer(),
-                  ]),
-                ),
+                        ],
+                      ]),
+                    ),
+                  );
+                },
               ),
             ),
           );
         },
+      );
+
+  Widget _slidingWindowBlock(int hiddenCount, bool showUnused) => Container(
+        key: const Key('chatSlidingWindowSummary'),
+        margin: const EdgeInsets.only(bottom: 16),
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: const Color(0xFFFFF7ED),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: const Color(0xFFFED7AA)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(children: [
+              const Icon(Icons.filter_alt_outlined, color: Color(0xFFC2410C)),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Sliding Window · $hiddenCount сообщений не используются',
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
+              ),
+            ]),
+            const SizedBox(height: 8),
+            const Text(
+              'Эти сообщения сохранены в истории, но не передаются модели.',
+              style: TextStyle(fontSize: 12, color: Color(0xFF667085)),
+            ),
+            const SizedBox(height: 6),
+            TextButton.icon(
+              key: const Key('toggleSlidingWindowMessages'),
+              onPressed: () => setState(() {
+                _expandedWindowCount = showUnused ? null : hiddenCount;
+              }),
+              icon: Icon(showUnused ? Icons.expand_less : Icons.expand_more),
+              label: Text(showUnused
+                  ? 'Скрыть неиспользуемые сообщения'
+                  : 'Показать неиспользуемые сообщения'),
+            ),
+          ],
+        ),
+      );
+
+  Widget _factsBlock(AgentChat chat) => Container(
+        key: const Key('chatFactsBlock'),
+        margin: const EdgeInsets.only(bottom: 16),
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: const Color(0xFFECFDF3),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: const Color(0xFFABEFC6)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(children: [
+              const Icon(Icons.push_pin_outlined, color: Color(0xFF067647)),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Text('Facts · долговременная память',
+                    style: TextStyle(fontWeight: FontWeight.w600)),
+              ),
+              IconButton(
+                key: const Key('refreshFactsButton'),
+                tooltip: 'Пересобрать facts из переписки',
+                visualDensity: VisualDensity.compact,
+                onPressed: _generating ||
+                        !chat.messages
+                            .any((message) => message.role == ChatRole.user)
+                    ? null
+                    : () => unawaited(_refreshFacts()),
+                icon: const Icon(Icons.refresh, size: 18),
+              ),
+            ]),
+            const SizedBox(height: 10),
+            if (chat.facts.isEmpty)
+              const Text('Факты появятся после первого сообщения.',
+                  style: TextStyle(fontSize: 12, color: Color(0xFF667085)))
+            else
+              ...chat.facts.entries.map((entry) => Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(entry.key,
+                            style: const TextStyle(
+                                fontSize: 12, fontWeight: FontWeight.w600)),
+                        const SizedBox(height: 2),
+                        Text(entry.value),
+                      ],
+                    ),
+                  )),
+          ],
+        ),
       );
 
   Widget _summaryBlock(AgentChat chat, bool showOriginals) => Container(
@@ -446,7 +741,7 @@ class _ChatPageState extends State<ChatPage> {
         ),
       );
 
-  Widget _compressionSettings(AgentChat chat) {
+  Widget _contextSettings(AgentChat chat) {
     String? validate(String? _) {
       if (!chat.compressionEnabled) return null;
       final max = int.tryParse(_maxController.text);
@@ -469,82 +764,141 @@ class _ChatPageState extends State<ChatPage> {
       child: Form(
         key: _compressionForm,
         child: Row(children: [
-          Tooltip(
-            message: 'При достижении max ранняя переписка заменяется резюме. '
-                'Последние min сообщений сохраняются полностью.'
-                '${chat.contextSummary.isEmpty ? '' : '\nВ резюме: ${chat.summarizedMessageCount} сообщений.'}',
-            child: SizedBox(
-                width: 132,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(_compressing ? 'Сжимаю контекст…' : 'Сжатие контекста',
-                        style: const TextStyle(fontSize: 12)),
-                    Switch.adaptive(
-                      key: const Key('contextCompressionSwitch'),
-                      value: chat.compressionEnabled,
-                      onChanged: _generating
-                          ? null
-                          : (enabled) {
-                              _maxController.text = '${chat.compressionMax}';
-                              _minController.text = '${chat.compressionMin}';
-                              widget.repository.updateCompressionSettings(
-                                  chat.id,
-                                  enabled: enabled,
-                                  max: chat.compressionMax,
-                                  min: chat.compressionMin);
-                              WidgetsBinding.instance.addPostFrameCallback((_) {
-                                if (mounted) {
-                                  _compressionForm.currentState?.validate();
-                                }
-                              });
-                            },
-                    ),
-                  ],
-                )),
+          SizedBox(
+            width: 180,
+            child: InputDecorator(
+              decoration:
+                  const InputDecoration(labelText: 'Стратегия', isDense: true),
+              child: DropdownButtonHideUnderline(
+                child: DropdownButton<ContextStrategy>(
+                  key: const Key('contextStrategyDropdown'),
+                  value: chat.contextStrategy,
+                  isExpanded: true,
+                  isDense: true,
+                  items: ContextStrategy.values
+                      .map((strategy) => DropdownMenuItem(
+                            value: strategy,
+                            child: Text(_strategyTitle(strategy),
+                                overflow: TextOverflow.ellipsis),
+                          ))
+                      .toList(),
+                  onChanged: _generating
+                      ? null
+                      : (strategy) {
+                          if (strategy != null) {
+                            unawaited(_selectContextStrategy(chat, strategy));
+                          }
+                        },
+                ),
+              ),
+            ),
           ),
           const SizedBox(width: 8),
-          Expanded(
-              child: Tooltip(
-                  message: 'Количество сообщений для запуска сжатия',
-                  child: TextFormField(
-                    key: const Key('compressionMaxField'),
-                    controller: _maxController,
-                    enabled: chat.compressionEnabled && !_generating,
-                    keyboardType: TextInputType.number,
-                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                    style: const TextStyle(fontSize: 14),
-                    decoration: const InputDecoration(
-                        labelText: 'max',
-                        isDense: true,
-                        contentPadding:
-                            EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-                        errorStyle: TextStyle(fontSize: 10)),
-                    validator: validate,
-                    onChanged: save,
-                  ))),
-          const SizedBox(width: 12),
-          Expanded(
-              child: Tooltip(
-                  message: 'Количество последних сообщений без сжатия',
-                  child: TextFormField(
-                    key: const Key('compressionMinField'),
-                    controller: _minController,
-                    enabled: chat.compressionEnabled && !_generating,
-                    keyboardType: TextInputType.number,
-                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                    style: const TextStyle(fontSize: 14),
-                    decoration: const InputDecoration(
-                        labelText: 'min',
-                        isDense: true,
-                        contentPadding:
-                            EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-                        errorStyle: TextStyle(fontSize: 10)),
-                    validator: validate,
-                    onChanged: save,
-                  ))),
+          if (chat.contextStrategy == ContextStrategy.compression) ...[
+            Expanded(
+                child: _numberField(
+              key: const Key('compressionMaxField'),
+              controller: _maxController,
+              label: 'max',
+              enabled: chat.compressionEnabled && !_generating,
+              validator: validate,
+              onChanged: save,
+            )),
+            const SizedBox(width: 8),
+            Expanded(
+                child: _numberField(
+              key: const Key('compressionMinField'),
+              controller: _minController,
+              label: 'min',
+              enabled: chat.compressionEnabled && !_generating,
+              validator: validate,
+              onChanged: save,
+            )),
+          ] else if (chat.contextStrategy == ContextStrategy.slidingWindow ||
+              chat.contextStrategy == ContextStrategy.stickyFacts)
+            Expanded(
+                child: _numberField(
+              key: const Key('contextWindowSizeField'),
+              controller: _windowController,
+              label: 'Последние N',
+              enabled: !_generating,
+              onChanged: (_) {
+                final value = int.tryParse(_windowController.text);
+                if (value != null && value >= 1 && value <= 200) {
+                  widget.repository.updateWindowSize(chat.id, value);
+                }
+              },
+            ))
+          else if (chat.contextStrategy == ContextStrategy.branching)
+            Expanded(child: _branchControls(chat)),
         ]),
       ),
+    );
+  }
+
+  String _strategyTitle(ContextStrategy strategy) => switch (strategy) {
+        ContextStrategy.fullHistory => 'Полная история',
+        ContextStrategy.compression => 'Compression',
+        ContextStrategy.slidingWindow => 'Sliding Window',
+        ContextStrategy.stickyFacts => 'Sticky Facts',
+        ContextStrategy.branching => 'Branching',
+      };
+
+  Widget _numberField({
+    required Key key,
+    required TextEditingController controller,
+    required String label,
+    required bool enabled,
+    String? Function(String?)? validator,
+    void Function(String)? onChanged,
+  }) =>
+      TextFormField(
+        key: key,
+        controller: controller,
+        enabled: enabled,
+        keyboardType: TextInputType.number,
+        inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+        style: const TextStyle(fontSize: 14),
+        decoration: InputDecoration(
+            labelText: label,
+            isDense: true,
+            contentPadding:
+                const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+            errorStyle: const TextStyle(fontSize: 10)),
+        validator: validator,
+        onChanged: onChanged,
+      );
+
+  Widget _branchControls(AgentChat chat) {
+    if (chat.branches.isEmpty) {
+      return FilledButton.tonalIcon(
+        key: const Key('createBranchesButton'),
+        onPressed: _generating
+            ? null
+            : () => widget.repository.createBranches(chat.id),
+        icon: const Icon(Icons.call_split, size: 18),
+        label: const Text('Создать 2 ветки'),
+      );
+    }
+    return DropdownButton<String>(
+      key: const Key('activeBranchDropdown'),
+      value: chat.activeBranchId,
+      isExpanded: true,
+      items: chat.branches
+          .map((branch) => DropdownMenuItem(
+                value: branch.id,
+                child: Text(branch.name),
+              ))
+          .toList(),
+      onChanged: _generating
+          ? null
+          : (id) {
+              if (id != null) {
+                setState(() => _expandedSummaryCount = null);
+                widget.repository.switchBranch(chat.id, id);
+                _scrollToEnd();
+              }
+            },
     );
   }
 
@@ -571,6 +925,7 @@ class _ChatPageState extends State<ChatPage> {
     String content, {
     bool streaming = false,
     bool summarized = false,
+    String? contextLabel,
     int? tokenCount,
   }) {
     final isUser = role == ChatRole.user;
@@ -601,18 +956,22 @@ class _ChatPageState extends State<ChatPage> {
                     height: 16,
                     child: CircularProgressIndicator(strokeWidth: 2)),
                 const SizedBox(width: 10),
-                Text(_compressing ? 'Сжимаю контекст…' : 'Генерирую ответ…'),
+                Text(_compressing
+                    ? (_factsUpdater != null
+                        ? 'Обновляю facts…'
+                        : 'Сжимаю контекст…')
+                    : 'Генерирую ответ…'),
               ])
             : Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   if (summarized) ...[
-                    const Row(mainAxisSize: MainAxisSize.min, children: [
-                      Icon(Icons.inventory_2_outlined,
+                    Row(mainAxisSize: MainAxisSize.min, children: [
+                      const Icon(Icons.inventory_2_outlined,
                           size: 14, color: Color(0xFF667085)),
-                      SizedBox(width: 6),
-                      Text('Включено в резюме',
-                          style: TextStyle(
+                      const SizedBox(width: 6),
+                      Text(contextLabel ?? 'Включено в резюме',
+                          style: const TextStyle(
                               fontSize: 11,
                               fontWeight: FontWeight.w600,
                               color: Color(0xFF667085))),
