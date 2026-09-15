@@ -21,7 +21,10 @@ void main() {
         name: 'Test',
         systemPrompt: 'Original',
         model: AgentModel.deepseekFlash);
-    id = repository.createChat(agent.id).id;
+    final project = repository.createProject(title: 'Test project');
+    final task =
+        repository.createTask(projectId: project.id, title: 'Test task');
+    id = repository.createChat(agentId: agent.id, taskId: task.id).id;
     provider = _Provider();
     repository.updateCompressionSettings(id, enabled: true, max: 4, min: 2);
   });
@@ -140,12 +143,12 @@ void main() {
 }
 
 class _Store implements KeyValueStore {
-  String? value;
+  final values = <String, String>{};
   @override
-  Future<String?> read(String key) async => value;
+  Future<String?> read(String key) async => values[key];
   @override
   Future<void> write(String key, String value) async {
-    this.value = value;
+    values[key] = value;
   }
 }
 

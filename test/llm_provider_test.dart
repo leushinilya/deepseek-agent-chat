@@ -47,7 +47,9 @@ void main() {
             agent: agent,
             messages: messages,
             summary: 'Prior summary',
-            facts: const {'goal': 'Ship'}))
+            facts: const {'goal': 'Ship'},
+            workingMemory: const ['Finish login screen'],
+            longTermMemory: const ['Prefers Flutter']))
         .events
         .toList();
 
@@ -56,6 +58,8 @@ void main() {
     expect(body['systemPrompt'], 'System only');
     expect(body['contextSummary'], 'Prior summary');
     expect(body['contextFacts'], {'goal': 'Ship'});
+    expect(body['workingMemory'], ['Finish login screen']);
+    expect(body['longTermMemory'], ['Prefers Flutter']);
     expect(events.whereType<LlmTextDelta>().map((event) => event.text),
         ['Hel', 'lo']);
     expect(events.last, isA<LlmDone>());

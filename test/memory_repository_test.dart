@@ -1,0 +1,156 @@
+import 'dart:convert';
+
+import 'package:deepseek_agent_chat/agents/memory_repository.dart';
+import 'package:deepseek_agent_chat/agents/models.dart';
+import 'package:deepseek_agent_chat/agents/repository.dart';
+import 'package:flutter_test/flutter_test.dart';
+
+void main() {
+  late _Store store;
+  late AgentChatRepository repository;
+  late AiAgent agent;
+  late AgentProject project;
+  late AgentTask task;
+  late AgentChat firstChat;
+
+  setUp(() async {
+    store = _Store();
+    repository = AgentChatRepository(store);
+    await repository.load();
+    agent = repository.createAgent(
+      name: 'Memory agent',
+      systemPrompt: 'Use memory',
+      model: AgentModel.deepseekFlash,
+    );
+    project = repository.createProject(title: 'Memory project');
+    task = repository.createTask(projectId: project.id, title: 'Memory task');
+    firstChat = repository.createChat(agentId: agent.id, taskId: task.id);
+  });
+
+  test('stores dialogue, working and long-term memory under separate keys',
+      () async {
+    repository.appendMessage(firstChat.id, ChatRole.user, 'Current message');
+    repository.rememberWorking(task.id, 'Current goal');
+    repository.rememberLongTerm(project.id, 'Prefers Flutter');
+    await repository.settled;
+
+    final shortKey = '${MemoryRepository.shortTermPrefix}${firstChat.id}';
+    final workingKey = '${MemoryRepository.workingPrefix}${task.id}';
+    final longKey = '${MemoryRepository.longTermPrefix}${project.id}';
+    expect(store.values.keys, containsAll([shortKey, workingKey, longKey]));
+    final metadata = jsonDecode(store.values['ai_agents_and_chats_v1']!);
+    expect(metadata['chats'].single.containsKey('messages'), isFalse,
+        reason: 'История должна храниться отдельно от метаданных чата.');
+    expect(jsonDecode(store.values[shortKey]!)['messages'].single['content'],
+        'Current message');
+    expect(jsonDecode(store.values[workingKey]!)['items'].single['content'],
+        'Current goal');
+    expect(jsonDecode(store.values[longKey]!)['items'].single['content'],
+        'Prefers Flutter');
+  });
+
+  test('task memory is shared by its chats and project memory also applies',
+      () async {
+    final secondChat =
+        repository.createChat(agentId: agent.id, taskId: task.id);
+    repository.rememberWorking(task.id, 'Shared task memory');
+    repository.rememberLongTerm(project.id, 'Shared profile');
+
+    expect(repository.workingMemory(secondChat.taskId).items.single.content,
+        'Shared task memory');
+    expect(repository.longTermMemory(project.id).items.single.content,
+        'Shared profile');
+  });
+
+  test('different tasks have isolated working memory', () {
+    final otherTask =
+        repository.createTask(projectId: project.id, title: 'Other task');
+    repository.rememberWorking(task.id, 'Only first task');
+    expect(repository.workingMemory(otherTask.id).items, isEmpty);
+  });
+
+  test('task requires project and chat requires both agent and task', () {
+    expect(() => repository.createTask(projectId: 'missing', title: 'Invalid'),
+        throwsStateError);
+    expect(() => repository.createChat(agentId: agent.id, taskId: 'missing'),
+        throwsStateError);
+    expect(() => repository.createChat(agentId: 'missing', taskId: task.id),
+        throwsStateError);
+  });
+
+  test('restores each memory type independently', () async {
+    repository.appendMessage(firstChat.id, ChatRole.user, 'Saved dialogue');
+    repository.rememberWorking(task.id, 'Saved task');
+    repository.rememberLongTerm(project.id, 'Saved knowledge');
+    await repository.settled;
+
+    final restored = AgentChatRepository(store);
+    await restored.load();
+    expect(restored.chatById(firstChat.id)!.messages.single.content,
+        'Saved dialogue');
+    expect(restored.workingMemory(task.id).items.single.content, 'Saved task');
+    expect(restored.longTermMemory(project.id).items.single.content,
+        'Saved knowledge');
+  });
+
+  test('migrates legacy chats into required tasks with their working memory',
+      () async {
+    await repository.settled;
+    final metadata = jsonDecode(store.values['ai_agents_and_chats_v1']!)
+        as Map<String, dynamic>;
+    metadata.remove('tasks');
+    metadata.remove('projects');
+    final legacyChat =
+        (metadata['chats'] as List<dynamic>).single as Map<String, dynamic>;
+    legacyChat.remove('taskId');
+    metadata['version'] = 1;
+    store.values['ai_agents_and_chats_v1'] = jsonEncode(metadata);
+    store.values['${MemoryRepository.workingPrefix}${firstChat.id}'] =
+        jsonEncode({
+      'chatId': firstChat.id,
+      'items': [
+        {
+          'id': 'legacy-memory',
+          'content': 'Legacy task context',
+          'createdAt': DateTime.utc(2026).toIso8601String(),
+        }
+      ],
+    });
+
+    final restored = AgentChatRepository(store);
+    await restored.load();
+    final migratedChat = restored.chatById(firstChat.id)!;
+    expect(restored.taskById(migratedChat.taskId), isNotNull);
+    expect(restored.workingMemory(migratedChat.taskId).items.single.content,
+        'Legacy task context');
+  });
+
+  test('ordinary messages do not implicitly enter durable memories', () {
+    repository.appendMessage(firstChat.id, ChatRole.user, 'Do not classify me');
+    expect(repository.workingMemory(task.id).items, isEmpty);
+    expect(repository.longTermMemory(project.id).items, isEmpty);
+  });
+
+  test('deletes individual working and long-term records', () {
+    repository.rememberWorking(task.id, 'Temporary task');
+    repository.rememberLongTerm(project.id, 'Outdated preference');
+    final workingId = repository.workingMemory(task.id).items.single.id;
+    final longTermId = repository.longTermMemory(project.id).items.single.id;
+
+    repository.deleteWorkingMemoryItem(task.id, workingId);
+    repository.deleteLongTermMemoryItem(project.id, longTermId);
+
+    expect(repository.workingMemory(task.id).items, isEmpty);
+    expect(repository.longTermMemory(project.id).items, isEmpty);
+  });
+}
+
+class _Store implements KeyValueStore {
+  final values = <String, String>{};
+
+  @override
+  Future<String?> read(String key) async => values[key];
+
+  @override
+  Future<void> write(String key, String value) async => values[key] = value;
+}

@@ -81,9 +81,13 @@ class _ChatPageState extends State<ChatPage> {
     final chat = widget.repository.chatById(widget.chatId);
     if (chat == null) return;
     if (!(_compressionForm.currentState?.validate() ?? true)) return;
+    final task = widget.repository.taskById(chat.taskId);
     final agent = widget.repository.agentById(chat.agentId);
-    if (agent == null) {
-      setState(() => _error = 'Агент этого чата больше недоступен.');
+    final project =
+        task == null ? null : widget.repository.projectById(task.projectId);
+    if (task == null || agent == null || project == null) {
+      setState(
+          () => _error = 'Проект, задача или агент этого чата недоступны.');
       return;
     }
     if (addUserMessage) {
@@ -148,6 +152,8 @@ class _ChatPageState extends State<ChatPage> {
     }
     final contextChat = widget.repository.chatById(widget.chatId);
     if (contextChat == null || !mounted) return;
+    final working = widget.repository.workingMemory(task.id);
+    final longTerm = widget.repository.longTermMemory(project.id);
     final operation = widget.provider.send(
       LlmRequest(
           agent: agent,
@@ -157,7 +163,9 @@ class _ChatPageState extends State<ChatPage> {
               : '',
           facts: contextChat.contextStrategy == ContextStrategy.stickyFacts
               ? contextChat.facts
-              : const {}),
+              : const {},
+          workingMemory: working.items.map((item) => item.content).toList(),
+          longTermMemory: longTerm.items.map((item) => item.content).toList()),
     );
     _operation = operation;
     _subscription = operation.events.listen(
@@ -287,17 +295,32 @@ class _ChatPageState extends State<ChatPage> {
         animation: widget.repository,
         builder: (context, _) {
           final chat = widget.repository.chatById(widget.chatId);
+          final task =
+              chat == null ? null : widget.repository.taskById(chat.taskId);
           final agent =
               chat == null ? null : widget.repository.agentById(chat.agentId);
-          if (chat == null || agent == null) {
+          final project = task == null
+              ? null
+              : widget.repository.projectById(task.projectId);
+          if (chat == null ||
+              task == null ||
+              agent == null ||
+              project == null) {
             return const Scaffold(
-              body: Center(child: Text('Чат или агент недоступен.')),
+              body: Center(
+                  child: Text('Проект, чат, задача или агент недоступны.')),
             );
           }
           final totalTokens = chat.messages.isEmpty
               ? 0
               : estimateTokenCount(agent.systemPrompt) +
                   estimateTokenCount(chat.activeSummary) +
+                  widget.repository.workingMemory(chat.taskId).items.fold<int>(
+                      0,
+                      (sum, item) => sum + estimateTokenCount(item.content)) +
+                  widget.repository.longTermMemory(project.id).items.fold<int>(
+                      0,
+                      (sum, item) => sum + estimateTokenCount(item.content)) +
                   chat.contextMessages.fold<int>(
                     0,
                     (sum, message) =>
@@ -346,7 +369,8 @@ class _ChatPageState extends State<ChatPage> {
                         children: [
                       Text(chat.title,
                           maxLines: 1, overflow: TextOverflow.ellipsis),
-                      Text('${agent.name} · ${agent.model.title}',
+                      Text(
+                          '${agent.name} · ${project.title} · ${task.title} · ${agent.model.title}',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
@@ -662,7 +686,7 @@ class _ChatPageState extends State<ChatPage> {
               const Icon(Icons.push_pin_outlined, color: Color(0xFF067647)),
               const SizedBox(width: 8),
               const Expanded(
-                child: Text('Facts · долговременная память',
+                child: Text('Sticky Facts · автоматические факты чата',
                     style: TextStyle(fontWeight: FontWeight.w600)),
               ),
               IconButton(

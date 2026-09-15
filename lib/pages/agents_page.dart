@@ -115,10 +115,7 @@ class AgentsPage extends StatelessWidget {
           ),
           IconButton(
             tooltip: 'Новый чат',
-            onPressed: () {
-              repository.createChat(agent.id);
-              onShowChats();
-            },
+            onPressed: () => _createChat(context, agent),
             icon: const Icon(Icons.add_comment_outlined),
           ),
           IconButton(
@@ -157,6 +154,37 @@ class AgentsPage extends StatelessWidget {
     }
   }
 
+  Future<void> _createChat(BuildContext context, AiAgent agent) async {
+    final tasks = repository.tasks;
+    if (tasks.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Сначала создайте хотя бы одну задачу.')));
+      return;
+    }
+    final taskId = await showDialog<String>(
+      context: context,
+      builder: (context) => SimpleDialog(
+        title: const Text('Выберите задачу для чата'),
+        children: [
+          for (final task in tasks)
+            SimpleDialogOption(
+              key: Key('selectAgentTask-${task.id}'),
+              onPressed: () => Navigator.pop(context, task.id),
+              child: ListTile(
+                leading: const Icon(Icons.task_alt_outlined),
+                title: Text(task.title),
+                subtitle: Text(repository.projectById(task.projectId)?.title ??
+                    'Проект недоступен'),
+              ),
+            ),
+        ],
+      ),
+    );
+    if (taskId == null) return;
+    repository.createChat(agentId: agent.id, taskId: taskId);
+    onShowChats();
+  }
+
   Future<void> _delete(BuildContext context, AiAgent agent) async {
     final count = repository.chatCountForAgent(agent.id);
     if (count > 0) {
@@ -164,8 +192,7 @@ class AgentsPage extends StatelessWidget {
         context: context,
         builder: (context) => AlertDialog(
           title: const Text('Нельзя удалить агента'),
-          content:
-              Text('С агентом связаны чаты: $count. Сначала удалите эти чаты.'),
+          content: Text('С агентом связаны чаты: $count. Сначала удалите их.'),
           actions: [
             TextButton(
                 onPressed: () => Navigator.pop(context),

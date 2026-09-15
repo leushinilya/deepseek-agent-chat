@@ -2,9 +2,10 @@ import 'package:flutter/material.dart';
 
 import '../agents/llm_provider.dart';
 import '../agents/repository.dart';
-import 'agents_page.dart';
 import 'chats_page.dart';
-import 'comparison_page.dart';
+import 'projects_page.dart';
+import 'settings_page.dart';
+import 'tasks_page.dart';
 
 class AppShell extends StatefulWidget {
   const AppShell({required this.repository, super.key});
@@ -20,15 +21,16 @@ class _AppShellState extends State<AppShell> {
   @override
   Widget build(BuildContext context) {
     final pages = [
-      const ComparisonPage(),
-      AgentsPage(
+      SettingsPage(
         repository: widget.repository,
-        onShowChats: () => setState(() => _index = 2),
+        onShowChats: () => setState(() => _index = 3),
       ),
+      ProjectsPage(repository: widget.repository),
+      TasksPage(repository: widget.repository),
       ChatsPage(
         repository: widget.repository,
         providerFactory: BackendLlmProvider.new,
-        onShowAgents: () => setState(() => _index = 1),
+        onShowAgents: () => setState(() => _index = 0),
       ),
     ];
     return LayoutBuilder(builder: (context, constraints) {
@@ -42,13 +44,18 @@ class _AppShellState extends State<AppShell> {
             onDestinationSelected: (value) => setState(() => _index = value),
             destinations: const [
               NavigationDestination(
-                icon: Icon(Icons.compare_arrows_rounded),
-                label: 'Сравнение',
+                icon: Icon(Icons.settings_outlined),
+                label: 'Настройки',
               ),
               NavigationDestination(
-                icon: Icon(Icons.smart_toy_outlined),
-                selectedIcon: Icon(Icons.smart_toy_rounded),
-                label: 'ИИ-агенты',
+                icon: Icon(Icons.folder_outlined),
+                selectedIcon: Icon(Icons.folder_rounded),
+                label: 'Проекты',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.task_alt_outlined),
+                selectedIcon: Icon(Icons.task_alt_rounded),
+                label: 'Задачи',
               ),
               NavigationDestination(
                 icon: Icon(Icons.forum_outlined),
@@ -68,13 +75,19 @@ class _AppShellState extends State<AppShell> {
             groupAlignment: -0.75,
             destinations: const [
               NavigationRailDestination(
-                icon: Icon(Icons.compare_arrows_rounded),
-                label: Text('Сравнение'),
+                icon: Icon(Icons.settings_outlined),
+                selectedIcon: Icon(Icons.settings_rounded),
+                label: Text('Настройки'),
               ),
               NavigationRailDestination(
-                icon: Icon(Icons.smart_toy_outlined),
-                selectedIcon: Icon(Icons.smart_toy_rounded),
-                label: Text('ИИ-агенты'),
+                icon: Icon(Icons.folder_outlined),
+                selectedIcon: Icon(Icons.folder_rounded),
+                label: Text('Проекты'),
+              ),
+              NavigationRailDestination(
+                icon: Icon(Icons.task_alt_outlined),
+                selectedIcon: Icon(Icons.task_alt_rounded),
+                label: Text('Задачи'),
               ),
               NavigationRailDestination(
                 icon: Icon(Icons.forum_outlined),

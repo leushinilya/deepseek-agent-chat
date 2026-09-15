@@ -37,7 +37,10 @@ void main() {
       systemPrompt: 'Prompt',
       model: AgentModel.deepseekFlash,
     );
-    final chat = repository.createChat(agent.id);
+    final project = repository.createProject(title: 'Test project');
+    final task =
+        repository.createTask(projectId: project.id, title: 'Test task');
+    final chat = repository.createChat(agentId: agent.id, taskId: task.id);
     repository.appendMessage(
         chat.id, ChatRole.user, 'Первое сообщение пользователя');
     repository.appendMessage(
@@ -62,10 +65,14 @@ void main() {
       systemPrompt: 'Prompt',
       model: AgentModel.localGigaChat,
     );
-    final chat = repository.createChat(agent.id);
+    final project = repository.createProject(title: 'Test project');
+    final task =
+        repository.createTask(projectId: project.id, title: 'Test task');
+    final chat = repository.createChat(agentId: agent.id, taskId: task.id);
     expect(() => repository.deleteAgent(agent.id),
         throwsA(isA<AgentHasChatsException>()));
     repository.deleteChat(chat.id);
+    repository.deleteTask(task.id);
     repository.deleteAgent(agent.id);
     expect(repository.agents, isEmpty);
   });

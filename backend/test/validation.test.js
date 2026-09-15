@@ -53,6 +53,35 @@ test('facts are validated and forwarded before recent messages', async () => {
   }
 });
 
+test('working and long-term memory are validated and forwarded separately', async () => {
+  const body = {
+    provider: 'deepseek',
+    model: 'deepseek-v4-flash',
+    systemPrompt: 'Original',
+    workingMemory: ['Build login screen'],
+    longTermMemory: ['User prefers Flutter'],
+    messages: [{role: 'user', content: 'Continue'}],
+  };
+  assert.equal(validateChatInput(body), null);
+  assert.match(validateChatInput({...body, workingMemory: {goal: 'x'}}), /Рабочая память/);
+  assert.match(validateChatInput({...body, longTermMemory: ['']}), /Долговременная память/);
+  let forwarded;
+  const deepseek = {async *generateStream(messages) { forwarded = messages; yield 'Answer'; }};
+  const server = createApp({deepseek}).listen(0, '127.0.0.1');
+  try {
+    await new Promise(resolve => server.once('listening', resolve));
+    await fetch(`http://127.0.0.1:${server.address().port}/api/chat`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body),
+    });
+    assert.deepEqual(forwarded.map(message => message.role),
+      ['system', 'assistant', 'assistant', 'user']);
+    assert.match(forwarded[1].content, /User prefers Flutter/);
+    assert.match(forwarded[2].content, /Build login screen/);
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
 test('comparison validation accepts only supported models', () => {
   assert.match(validateComparisonInput({query: ' ', model: 'local-gigachat'}), /пустым/);
   assert.match(validateComparisonInput({query: 'x'.repeat(8001), model: 'local-gigachat'}), /8000/);

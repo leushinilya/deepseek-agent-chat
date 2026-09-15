@@ -78,7 +78,9 @@ class ChatsPage extends StatelessWidget {
             Text(
               repository.agents.isEmpty
                   ? 'Сначала создайте ИИ-агента.'
-                  : 'Выберите агента и начните новый диалог.',
+                  : repository.tasks.isEmpty
+                      ? 'Создайте задачу и выберите для неё агента.'
+                      : 'Выберите задачу и начните новый диалог.',
               style: const TextStyle(color: Color(0xFF667085)),
             ),
             if (repository.agents.isEmpty) ...[
@@ -94,6 +96,7 @@ class ChatsPage extends StatelessWidget {
       );
 
   Widget _card(BuildContext context, AgentChat chat) {
+    final task = repository.taskById(chat.taskId);
     final agent = repository.agentById(chat.agentId);
     return AppSurface(
       padding: const EdgeInsets.all(16),
@@ -117,9 +120,7 @@ class ChatsPage extends StatelessWidget {
                             fontSize: 16, fontWeight: FontWeight.w800)),
                     const SizedBox(height: 3),
                     Text(
-                      agent == null
-                          ? 'Агент недоступен'
-                          : '${agent.name} · ${agent.model.title}',
+                      '${agent?.name ?? 'Агент недоступен'} · ${task?.title ?? 'Задача недоступна'}',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(color: Color(0xFF667085)),
@@ -143,32 +144,18 @@ class ChatsPage extends StatelessWidget {
   }
 
   Future<void> _create(BuildContext context) async {
-    if (repository.agents.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Сначала создайте хотя бы одного ИИ-агента.')));
-      onShowAgents();
+    if (repository.agents.isEmpty || repository.tasks.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Для чата нужны ИИ-агент и задача.')));
       return;
     }
-    final agentId = await showDialog<String>(
+    final result = await showDialog<({String agentId, String taskId})>(
       context: context,
-      builder: (context) => SimpleDialog(
-        title: const Text('Выберите агента'),
-        children: [
-          for (final agent in repository.agents)
-            SimpleDialogOption(
-              key: Key('selectAgent-${agent.id}'),
-              onPressed: () => Navigator.pop(context, agent.id),
-              child: ListTile(
-                leading: const Icon(Icons.smart_toy_outlined),
-                title: Text(agent.name),
-                subtitle: Text(agent.model.title),
-              ),
-            ),
-        ],
-      ),
+      builder: (context) => _CreateChatDialog(repository: repository),
     );
-    if (agentId == null || !context.mounted) return;
-    final chat = repository.createChat(agentId);
+    if (result == null || !context.mounted) return;
+    final chat =
+        repository.createChat(agentId: result.agentId, taskId: result.taskId);
     _open(context, chat);
   }
 
@@ -200,4 +187,63 @@ class ChatsPage extends StatelessWidget {
     );
     if (confirmed == true) repository.deleteChat(chat.id);
   }
+}
+
+class _CreateChatDialog extends StatefulWidget {
+  const _CreateChatDialog({required this.repository});
+  final AgentChatRepository repository;
+
+  @override
+  State<_CreateChatDialog> createState() => _CreateChatDialogState();
+}
+
+class _CreateChatDialogState extends State<_CreateChatDialog> {
+  late String _agentId = widget.repository.agents.first.id;
+  late String _taskId = widget.repository.tasks.first.id;
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+        title: const Text('Новый чат'),
+        content: SizedBox(
+          width: 520,
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            DropdownButtonFormField<String>(
+              key: const Key('chatAgentField'),
+              initialValue: _agentId,
+              decoration: const InputDecoration(labelText: 'ИИ-агент'),
+              items: widget.repository.agents
+                  .map((agent) => DropdownMenuItem(
+                      value: agent.id, child: Text(agent.name)))
+                  .toList(),
+              onChanged: (value) {
+                if (value != null) setState(() => _agentId = value);
+              },
+            ),
+            const SizedBox(height: 14),
+            DropdownButtonFormField<String>(
+              key: const Key('chatTaskField'),
+              initialValue: _taskId,
+              decoration: const InputDecoration(labelText: 'Задача'),
+              items: widget.repository.tasks
+                  .map((task) =>
+                      DropdownMenuItem(value: task.id, child: Text(task.title)))
+                  .toList(),
+              onChanged: (value) {
+                if (value != null) setState(() => _taskId = value);
+              },
+            ),
+          ]),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Отмена')),
+          FilledButton(
+            key: const Key('saveChatButton'),
+            onPressed: () =>
+                Navigator.pop(context, (agentId: _agentId, taskId: _taskId)),
+            child: const Text('Создать'),
+          ),
+        ],
+      );
 }

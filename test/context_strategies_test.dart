@@ -21,7 +21,10 @@ void main() {
       systemPrompt: 'System',
       model: AgentModel.deepseekFlash,
     );
-    chatId = repository.createChat(agent.id).id;
+    final project = repository.createProject(title: 'Test project');
+    final task =
+        repository.createTask(projectId: project.id, title: 'Test task');
+    chatId = repository.createChat(agentId: agent.id, taskId: task.id).id;
   });
 
   test('sliding window keeps full history but sends only last N messages', () {
@@ -156,9 +159,9 @@ class _Operation implements LlmOperation {
 }
 
 class _Store implements KeyValueStore {
-  String? value;
+  final values = <String, String>{};
   @override
-  Future<String?> read(String key) async => value;
+  Future<String?> read(String key) async => values[key];
   @override
-  Future<void> write(String key, String value) async => this.value = value;
+  Future<void> write(String key, String value) async => values[key] = value;
 }

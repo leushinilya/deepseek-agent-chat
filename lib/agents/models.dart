@@ -176,10 +176,86 @@ class ChatBranch {
       );
 }
 
+class AgentProject {
+  const AgentProject({
+    required this.id,
+    required this.title,
+    required this.createdAt,
+    required this.updatedAt,
+  });
+
+  final String id;
+  final String title;
+  final DateTime createdAt;
+  final DateTime updatedAt;
+
+  AgentProject copyWith({String? title, DateTime? updatedAt}) => AgentProject(
+        id: id,
+        title: title ?? this.title,
+        createdAt: createdAt,
+        updatedAt: updatedAt ?? this.updatedAt,
+      );
+
+  Map<String, Object> toJson() => {
+        'id': id,
+        'title': title,
+        'createdAt': createdAt.toIso8601String(),
+        'updatedAt': updatedAt.toIso8601String(),
+      };
+
+  factory AgentProject.fromJson(Map<String, dynamic> json) => AgentProject(
+        id: json['id'] as String,
+        title: json['title'] as String,
+        createdAt: DateTime.parse(json['createdAt'] as String),
+        updatedAt: DateTime.parse(json['updatedAt'] as String),
+      );
+}
+
+class AgentTask {
+  const AgentTask({
+    required this.id,
+    required this.projectId,
+    required this.title,
+    required this.createdAt,
+    required this.updatedAt,
+  });
+
+  final String id;
+  final String projectId;
+  final String title;
+  final DateTime createdAt;
+  final DateTime updatedAt;
+
+  AgentTask copyWith({String? title, DateTime? updatedAt}) => AgentTask(
+        id: id,
+        projectId: projectId,
+        title: title ?? this.title,
+        createdAt: createdAt,
+        updatedAt: updatedAt ?? this.updatedAt,
+      );
+
+  Map<String, Object> toJson() => {
+        'id': id,
+        'projectId': projectId,
+        'title': title,
+        'createdAt': createdAt.toIso8601String(),
+        'updatedAt': updatedAt.toIso8601String(),
+      };
+
+  factory AgentTask.fromJson(Map<String, dynamic> json) => AgentTask(
+        id: json['id'] as String,
+        projectId: json['projectId'] as String? ?? json['agentId'] as String,
+        title: json['title'] as String,
+        createdAt: DateTime.parse(json['createdAt'] as String),
+        updatedAt: DateTime.parse(json['updatedAt'] as String),
+      );
+}
+
 class AgentChat {
   const AgentChat({
     required this.id,
     required this.agentId,
+    required this.taskId,
     required this.title,
     required this.messages,
     required this.createdAt,
@@ -198,6 +274,7 @@ class AgentChat {
 
   final String id;
   final String agentId;
+  final String taskId;
   final String title;
   final List<ChatMessage> messages;
   final DateTime createdAt;
@@ -258,6 +335,7 @@ class AgentChat {
       AgentChat(
         id: id,
         agentId: agentId,
+        taskId: taskId,
         title: title ?? this.title,
         messages: messages ?? this.messages,
         createdAt: createdAt,
@@ -276,11 +354,13 @@ class AgentChat {
             checkpointMessageCount ?? this.checkpointMessageCount,
       );
 
-  Map<String, Object> toJson() => {
+  Map<String, Object> toJson({bool includeMessages = true}) => {
         'id': id,
         'agentId': agentId,
+        'taskId': taskId,
         'title': title,
-        'messages': messages.map((message) => message.toJson()).toList(),
+        if (includeMessages)
+          'messages': messages.map((message) => message.toJson()).toList(),
         'createdAt': createdAt.toIso8601String(),
         'lastActivityAt': lastActivityAt.toIso8601String(),
         'compressionEnabled': compressionEnabled,
@@ -300,8 +380,9 @@ class AgentChat {
   factory AgentChat.fromJson(Map<String, dynamic> json) => AgentChat(
         id: json['id'] as String,
         agentId: json['agentId'] as String,
+        taskId: json['taskId'] as String? ?? json['id'] as String,
         title: json['title'] as String,
-        messages: (json['messages'] as List<dynamic>)
+        messages: (json['messages'] as List<dynamic>? ?? const [])
             .map((value) => ChatMessage.fromJson(value as Map<String, dynamic>))
             .toList(growable: false),
         createdAt: DateTime.parse(json['createdAt'] as String),

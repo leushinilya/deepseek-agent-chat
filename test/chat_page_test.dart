@@ -9,18 +9,23 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   late AgentChatRepository repository;
+  late AiAgent agent;
+  late AgentProject project;
   late AgentChat chat;
   late _FakeProvider provider;
 
   setUp(() async {
     repository = AgentChatRepository(_MemoryStore());
     await repository.load();
-    final agent = repository.createAgent(
+    agent = repository.createAgent(
       name: 'Помощник',
       systemPrompt: 'Отвечай кратко',
       model: AgentModel.localGigaChat,
     );
-    chat = repository.createChat(agent.id);
+    project = repository.createProject(title: 'Тестовый проект');
+    final task =
+        repository.createTask(projectId: project.id, title: 'Тестовая задача');
+    chat = repository.createChat(agentId: agent.id, taskId: task.id);
     provider = _FakeProvider();
   });
 
@@ -55,6 +60,28 @@ void main() {
     expect(find.byKey(const Key('chatTotalTokens')), findsOneWidget);
     expect(find.byKey(const Key('chatTokenProgress')), findsOneWidget);
     expect(find.textContaining('из 262 144 токенов'), findsOneWidget);
+  });
+
+  testWidgets('has no memory button and sends task working memory',
+      (tester) async {
+    repository.rememberWorking(chat.taskId, 'Не использовать Firebase');
+    repository.rememberLongTerm(
+        project.id, 'Пользователь предпочитает Flutter');
+    await tester.pumpWidget(MaterialApp(
+      home:
+          ChatPage(repository: repository, chatId: chat.id, provider: provider),
+    ));
+
+    expect(find.byKey(const Key('memoryPanelButton')), findsNothing);
+
+    await tester.enterText(
+        find.byKey(const Key('chatMessageField')), 'Продолжай');
+    await tester.tap(find.byKey(const Key('sendMessageButton')));
+    await tester.pump();
+    expect(
+        provider.requests.single.workingMemory, ['Не использовать Firebase']);
+    expect(provider.requests.single.longTermMemory,
+        ['Пользователь предпочитает Flutter']);
   });
 
   testWidgets('compression settings validate and summary precedes answer',
