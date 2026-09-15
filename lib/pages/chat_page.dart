@@ -165,7 +165,8 @@ class _ChatPageState extends State<ChatPage> {
               ? contextChat.facts
               : const {},
           workingMemory: working.items.map((item) => item.content).toList(),
-          longTermMemory: longTerm.items.map((item) => item.content).toList()),
+          longTermMemory: longTerm.items.map((item) => item.content).toList(),
+          userProfile: widget.repository.userProfile),
     );
     _operation = operation;
     _subscription = operation.events.listen(

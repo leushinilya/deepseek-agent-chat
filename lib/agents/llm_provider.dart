@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import 'models.dart';
+import 'user_profile.dart';
 
 class LlmRequest {
   const LlmRequest({
@@ -13,6 +14,7 @@ class LlmRequest {
     this.facts = const {},
     this.workingMemory = const [],
     this.longTermMemory = const [],
+    this.userProfile = const UserProfile(),
   });
   final AiAgent agent;
   final List<ChatMessage> messages;
@@ -20,6 +22,7 @@ class LlmRequest {
   final Map<String, String> facts;
   final List<String> workingMemory;
   final List<String> longTermMemory;
+  final UserProfile userProfile;
 }
 
 sealed class LlmEvent {
@@ -95,6 +98,8 @@ class BackendLlmProvider implements LlmProvider {
                   'workingMemory': request.workingMemory,
                 if (request.longTermMemory.isNotEmpty)
                   'longTermMemory': request.longTermMemory,
+                if (!request.userProfile.isEmpty)
+                  'userProfile': request.userProfile.toJson(),
               });
         final response = await client.send(httpRequest).timeout(
               const Duration(seconds: 30),

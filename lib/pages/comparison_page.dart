@@ -5,9 +5,12 @@ import '../comparison/comparison_api.dart';
 import '../comparison/comparison_runner.dart';
 import '../comparison/models.dart';
 import '../comparison/validation.dart';
+import '../agents/repository.dart';
 
 class ComparisonPage extends StatefulWidget {
-  const ComparisonPage({super.key});
+  const ComparisonPage({required this.repository, super.key});
+
+  final AgentChatRepository repository;
 
   @override
   State<ComparisonPage> createState() => _ComparisonPageState();
@@ -16,8 +19,8 @@ class ComparisonPage extends StatefulWidget {
 class _ComparisonPageState extends State<ComparisonPage> {
   final _queryController = TextEditingController();
   final _queryFocus = FocusNode();
-  late final ComparisonRunner _runner =
-      ComparisonRunner(() => ComparisonApiClient());
+  late final ComparisonRunner _runner = ComparisonRunner(
+      () => ComparisonApiClient(userProfile: widget.repository.userProfile));
   final _states = <ModelTarget, _ResultState>{
     for (final target in ModelTarget.values) target: const _ResultState(),
   };

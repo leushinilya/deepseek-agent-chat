@@ -1,5 +1,6 @@
 import 'package:deepseek_agent_chat/agents/models.dart';
 import 'package:deepseek_agent_chat/agents/repository.dart';
+import 'package:deepseek_agent_chat/agents/user_profile.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -86,6 +87,24 @@ void main() {
       ),
       throwsArgumentError,
     );
+  });
+
+  test('saves and restores user profile', () async {
+    repository.updateUserProfile(const UserProfile(
+      name: 'Анна',
+      style: 'Кратко и дружелюбно',
+      format: 'Списками',
+      constraints: 'Без англицизмов',
+    ));
+    await repository.settled;
+
+    final restored = AgentChatRepository(store);
+    await restored.load();
+
+    expect(restored.userProfile.name, 'Анна');
+    expect(restored.userProfile.style, 'Кратко и дружелюбно');
+    expect(restored.userProfile.format, 'Списками');
+    expect(restored.userProfile.constraints, 'Без англицизмов');
   });
 }
 

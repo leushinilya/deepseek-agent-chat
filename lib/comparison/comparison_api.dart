@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import 'models.dart';
+import '../agents/user_profile.dart';
 
 abstract interface class ComparisonGateway {
   Future<ModelResponse> fetchAnswer(String query, ModelTarget target);
@@ -16,19 +17,26 @@ class ComparisonApiException implements Exception {
 }
 
 class ComparisonApiClient implements ComparisonGateway {
-  ComparisonApiClient({http.Client? client, String? baseUrl})
-      : _client = client ?? http.Client(),
+  ComparisonApiClient({
+    http.Client? client,
+    String? baseUrl,
+    this.userProfile = const UserProfile(),
+  })  : _client = client ?? http.Client(),
         _baseUrl = baseUrl ??
             const String.fromEnvironment('API_BASE_URL',
                 defaultValue: 'http://localhost:3000');
 
   final http.Client _client;
   final String _baseUrl;
+  final UserProfile userProfile;
 
   @override
   Future<ModelResponse> fetchAnswer(String query, ModelTarget target) async {
-    final payload =
-        await _post('/api/compare', {'query': query, 'model': target.id});
+    final payload = await _post('/api/compare', {
+      'query': query,
+      'model': target.id,
+      if (!userProfile.isEmpty) 'userProfile': userProfile.toJson(),
+    });
     final answer = payload['answer'];
     final metrics = payload['metrics'];
     if (answer is! String ||

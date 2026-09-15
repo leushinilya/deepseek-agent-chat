@@ -91,6 +91,41 @@ test('comparison validation accepts only supported models', () => {
   assert.match(validateComparisonInput({query: 'ok', model: 'unknown'}), /неподдерживаемая/);
 });
 
+test('user profile is validated and applied to chat and comparison prompts', async () => {
+  const profile = {
+    name: 'Анна', style: 'Кратко', format: 'Списком', constraints: 'Без эмодзи',
+  };
+  const chatBody = {provider: 'deepseek', model: 'deepseek-v4-flash',
+    systemPrompt: 'Original', userProfile: profile,
+    messages: [{role: 'user', content: 'Continue'}]};
+  assert.equal(validateChatInput(chatBody), null);
+  assert.equal(validateComparisonInput({query: 'Question', model: 'deepseek-v4-pro', userProfile: profile}), null);
+  assert.match(validateChatInput({...chatBody, userProfile: []}), /Профиль/);
+  assert.match(validateChatInput({...chatBody, userProfile: {unknown: 'x'}}), /профиля/);
+
+  let chatMessages;
+  let comparisonMessages;
+  const deepseek = {
+    async *generateStream(messages) { chatMessages = messages; yield 'Answer'; },
+    async generate(messages) {
+      comparisonMessages = messages;
+      return {answer: 'Answer', metrics: {durationMs: 1, promptTokens: 1, completionTokens: 1, totalTokens: 2}};
+    },
+  };
+  const server = createApp({deepseek}).listen(0, '127.0.0.1');
+  try {
+    await new Promise(resolve => server.once('listening', resolve));
+    const base = `http://127.0.0.1:${server.address().port}`;
+    await fetch(`${base}/api/chat`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(chatBody)});
+    await fetch(`${base}/api/compare`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({query: 'Question', model: 'deepseek-v4-pro', userProfile: profile})});
+    assert.match(chatMessages[0].content, /Анна/);
+    assert.match(chatMessages[0].content, /Без эмодзи/);
+    assert.match(comparisonMessages[0].content, /Кратко/);
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
 test('DeepSeek client forwards model and returns usage metrics', async () => {
   let requestBody;
   const client = createDeepSeekClient({

@@ -8,6 +8,7 @@ import 'memory_models.dart';
 import 'memory_repository.dart';
 import 'models.dart';
 import 'token_counter.dart';
+import 'user_profile.dart';
 
 export 'key_value_store.dart';
 
@@ -34,7 +35,7 @@ class AgentChatRepository extends ChangeNotifier {
       : memory = MemoryRepository(_store, clock: _clock);
 
   static const _storageKey = 'ai_agents_and_chats_v1';
-  static const _schemaVersion = 3;
+  static const _schemaVersion = 4;
 
   final KeyValueStore _store;
   final DateTime Function() _clock;
@@ -44,11 +45,13 @@ class AgentChatRepository extends ChangeNotifier {
   final List<AgentProject> _projects = [];
   final List<AgentTask> _tasks = [];
   final List<AgentChat> _chats = [];
+  UserProfile _userProfile = const UserProfile();
   Future<void> _pendingWrite = Future.value();
 
   bool isLoaded = false;
   String? loadError;
   List<AiAgent> get agents => List.unmodifiable(_agents);
+  UserProfile get userProfile => _userProfile;
   List<AgentProject> get projects {
     final result = [..._projects]
       ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
@@ -79,6 +82,10 @@ class AgentChatRepository extends ChangeNotifier {
         final json = jsonDecode(raw) as Map<String, dynamic>;
         if ((json['version'] as int? ?? 0) > _schemaVersion) {
           throw const FormatException('Unsupported storage version');
+        }
+        final profile = json['userProfile'];
+        if (profile is Map<String, dynamic>) {
+          _userProfile = UserProfile.fromJson(profile);
         }
         _agents
           ..clear()
@@ -164,6 +171,28 @@ class AgentChatRepository extends ChangeNotifier {
     _agents.add(agent);
     _changed();
     return agent;
+  }
+
+  void updateUserProfile(UserProfile profile) {
+    String clean(String value, String label) {
+      final result = value.trim();
+      if (result.length > 4000) {
+        throw ArgumentError('$label не должен превышать 4000 символов.');
+      }
+      return result;
+    }
+
+    final name = profile.name.trim();
+    if (name.length > 100) {
+      throw ArgumentError('Имя не должно превышать 100 символов.');
+    }
+    _userProfile = UserProfile(
+      name: name,
+      style: clean(profile.style, 'Стиль'),
+      format: clean(profile.format, 'Формат'),
+      constraints: clean(profile.constraints, 'Ограничения'),
+    );
+    _changed();
   }
 
   void updateAgent(AiAgent agent) {
@@ -526,6 +555,7 @@ class AgentChatRepository extends ChangeNotifier {
   Future<void> _persist() async {
     final value = jsonEncode({
       'version': _schemaVersion,
+      'userProfile': _userProfile.toJson(),
       'agents': _agents.map((agent) => agent.toJson()).toList(),
       'projects': _projects.map((project) => project.toJson()).toList(),
       'tasks': _tasks.map((task) => task.toJson()).toList(),

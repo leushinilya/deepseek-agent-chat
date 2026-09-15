@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:deepseek_agent_chat/agents/llm_provider.dart';
 import 'package:deepseek_agent_chat/agents/models.dart';
 import 'package:deepseek_agent_chat/agents/repository.dart';
+import 'package:deepseek_agent_chat/agents/user_profile.dart';
 import 'package:deepseek_agent_chat/pages/chat_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -60,6 +61,25 @@ void main() {
     expect(find.byKey(const Key('chatTotalTokens')), findsOneWidget);
     expect(find.byKey(const Key('chatTokenProgress')), findsOneWidget);
     expect(find.textContaining('из 262 144 токенов'), findsOneWidget);
+  });
+
+  testWidgets('adds the saved profile to a chat request', (tester) async {
+    repository.updateUserProfile(const UserProfile(
+      name: 'Анна',
+      style: 'Кратко',
+      format: 'Список',
+      constraints: 'Без эмодзи',
+    ));
+    await tester.pumpWidget(MaterialApp(
+      home:
+          ChatPage(repository: repository, chatId: chat.id, provider: provider),
+    ));
+    await tester.enterText(find.byKey(const Key('chatMessageField')), 'Привет');
+    await tester.tap(find.byKey(const Key('sendMessageButton')));
+    await tester.pump();
+
+    expect(provider.requests.single.userProfile.name, 'Анна');
+    expect(provider.requests.single.userProfile.constraints, 'Без эмодзи');
   });
 
   testWidgets('has no memory button and sends task working memory',

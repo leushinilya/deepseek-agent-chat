@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:deepseek_agent_chat/agents/llm_provider.dart';
 import 'package:deepseek_agent_chat/agents/models.dart';
+import 'package:deepseek_agent_chat/agents/user_profile.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -49,7 +50,9 @@ void main() {
             summary: 'Prior summary',
             facts: const {'goal': 'Ship'},
             workingMemory: const ['Finish login screen'],
-            longTermMemory: const ['Prefers Flutter']))
+            longTermMemory: const ['Prefers Flutter'],
+            userProfile: const UserProfile(
+                name: 'Anna', style: 'Concise', format: 'Bullets')))
         .events
         .toList();
 
@@ -60,6 +63,8 @@ void main() {
     expect(body['contextFacts'], {'goal': 'Ship'});
     expect(body['workingMemory'], ['Finish login screen']);
     expect(body['longTermMemory'], ['Prefers Flutter']);
+    expect(body['userProfile'],
+        {'name': 'Anna', 'style': 'Concise', 'format': 'Bullets'});
     expect(events.whereType<LlmTextDelta>().map((event) => event.text),
         ['Hel', 'lo']);
     expect(events.last, isA<LlmDone>());
