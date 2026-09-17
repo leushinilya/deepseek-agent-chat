@@ -48,22 +48,26 @@ class ShortTermMemory {
 }
 
 class WorkingMemory {
-  const WorkingMemory({required this.taskId, this.items = const []});
+  const WorkingMemory({required this.taskId, this.content = ''});
 
   final String taskId;
-  final List<MemoryItem> items;
+  final String content;
 
   Map<String, Object> toJson() => {
         'taskId': taskId,
-        'items': items.map((item) => item.toJson()).toList(),
+        'content': content,
       };
 
-  factory WorkingMemory.fromJson(Map<String, dynamic> json) => WorkingMemory(
-        taskId: json['taskId'] as String? ?? json['chatId'] as String,
-        items: (json['items'] as List<dynamic>? ?? const [])
-            .map((value) => MemoryItem.fromJson(value as Map<String, dynamic>))
-            .toList(growable: false),
-      );
+  factory WorkingMemory.fromJson(Map<String, dynamic> json) {
+    final legacyItems = (json['items'] as List<dynamic>? ?? const [])
+        .map((value) => MemoryItem.fromJson(value as Map<String, dynamic>))
+        .map((item) => item.content)
+        .where((content) => content.trim().isNotEmpty);
+    return WorkingMemory(
+      taskId: json['taskId'] as String? ?? json['chatId'] as String,
+      content: json['content'] as String? ?? legacyItems.join('\n\n'),
+    );
+  }
 }
 
 class LongTermMemory {

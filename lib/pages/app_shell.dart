@@ -1,8 +1,6 @@
 import 'package:flutter/material.dart';
 
-import '../agents/llm_provider.dart';
 import '../agents/repository.dart';
-import 'chats_page.dart';
 import 'projects_page.dart';
 import 'settings_page.dart';
 import 'tasks_page.dart';
@@ -21,17 +19,9 @@ class _AppShellState extends State<AppShell> {
   @override
   Widget build(BuildContext context) {
     final pages = [
-      SettingsPage(
-        repository: widget.repository,
-        onShowChats: () => setState(() => _index = 3),
-      ),
+      SettingsPage(repository: widget.repository),
       ProjectsPage(repository: widget.repository),
       TasksPage(repository: widget.repository),
-      ChatsPage(
-        repository: widget.repository,
-        providerFactory: BackendLlmProvider.new,
-        onShowAgents: () => setState(() => _index = 0),
-      ),
     ];
     return LayoutBuilder(builder: (context, constraints) {
       final wide = constraints.maxWidth >= 760;
@@ -56,11 +46,6 @@ class _AppShellState extends State<AppShell> {
                 icon: Icon(Icons.task_alt_outlined),
                 selectedIcon: Icon(Icons.task_alt_rounded),
                 label: 'Задачи',
-              ),
-              NavigationDestination(
-                icon: Icon(Icons.forum_outlined),
-                selectedIcon: Icon(Icons.forum_rounded),
-                label: 'Чаты',
               ),
             ],
           ),
@@ -88,11 +73,6 @@ class _AppShellState extends State<AppShell> {
                 icon: Icon(Icons.task_alt_outlined),
                 selectedIcon: Icon(Icons.task_alt_rounded),
                 label: Text('Задачи'),
-              ),
-              NavigationRailDestination(
-                icon: Icon(Icons.forum_outlined),
-                selectedIcon: Icon(Icons.forum_rounded),
-                label: Text('Чаты'),
               ),
             ],
           ),

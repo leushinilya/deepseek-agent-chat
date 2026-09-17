@@ -60,6 +60,57 @@ void main() {
     expect(restored.chats.single.messages.last.tokenCount, 17);
   });
 
+  test('configured task states advance strictly and persist results', () async {
+    final project = repository.createProject(title: 'State project');
+    final model = repository.createStateModel(title: 'Delivery');
+    final planning = repository.addStateToModel(model.id,
+        name: 'Planning', description: 'Create a plan', colorValue: 0xFF0000FF);
+    final execution = repository.addStateToModel(model.id,
+        name: 'Execution', description: 'Implement', colorValue: 0xFF00FF00);
+    final validation = repository.addStateToModel(model.id,
+        name: 'Validation', description: 'Validate', colorValue: 0xFFFF0000);
+    repository.assignStateModelToProject(project.id, model.id);
+    final task = repository.createTask(
+      projectId: project.id,
+      title: 'State task',
+    );
+
+    expect(task.currentStateId, planning.id);
+    repository.updateTask(task.copyWith(currentStateId: validation.id));
+    expect(repository.taskById(task.id)!.currentStateId, planning.id);
+    repository.completeCurrentTaskState(task.id, 'Implementation plan');
+    expect(repository.taskById(task.id)!.currentStateId, execution.id);
+    expect(repository.taskById(task.id)!.stageResults.single.result,
+        'Implementation plan');
+    repository.completeCurrentTaskState(task.id, 'Implemented feature');
+    expect(repository.taskById(task.id)!.currentStateId, validation.id);
+    repository.completeCurrentTaskState(task.id, 'Validation passed');
+    expect(repository.isTaskComplete(repository.taskById(task.id)!), isTrue);
+    expect(
+      () => repository.completeCurrentTaskState(task.id, 'Cannot advance'),
+      throwsA(isA<StateError>()),
+    );
+    await repository.settled;
+
+    final restored = AgentChatRepository(store);
+    await restored.load();
+    expect(restored.taskById(task.id)!.currentStateId, validation.id);
+    expect(restored.taskById(task.id)!.stageResults, hasLength(3));
+    expect(restored.stateModels.single.states, hasLength(3));
+  });
+
+  test('legacy task without a configured model has no state', () {
+    final task = AgentTask.fromJson({
+      'id': 'legacy-task',
+      'projectId': 'project',
+      'title': 'Legacy',
+      'createdAt': start.toIso8601String(),
+      'updatedAt': start.toIso8601String(),
+    });
+
+    expect(task.currentStateId, isNull);
+  });
+
   test('does not delete an agent with linked chats', () {
     final agent = repository.createAgent(
       name: 'Agent',
@@ -76,6 +127,49 @@ void main() {
     repository.deleteTask(task.id);
     repository.deleteAgent(agent.id);
     expect(repository.agents, isEmpty);
+  });
+
+  test('deleting a task also deletes all linked chats', () {
+    final agent = repository.createAgent(
+      name: 'Agent',
+      systemPrompt: 'Prompt',
+      model: AgentModel.localGigaChat,
+    );
+    final project = repository.createProject(title: 'Project');
+    final task = repository.createTask(projectId: project.id, title: 'Task');
+    repository.createChat(agentId: agent.id, taskId: task.id);
+    repository.createChat(agentId: agent.id, taskId: task.id);
+
+    repository.deleteTask(task.id);
+
+    expect(repository.taskById(task.id), isNull);
+    expect(repository.chats, isEmpty);
+  });
+
+  test('task agent is used when creating its chats', () {
+    final first = repository.createAgent(
+      name: 'First',
+      systemPrompt: 'First prompt',
+      model: AgentModel.localGigaChat,
+    );
+    final second = repository.createAgent(
+      name: 'Second',
+      systemPrompt: 'Second prompt',
+      model: AgentModel.deepseekFlash,
+    );
+    final project = repository.createProject(title: 'Project');
+    final task = repository.createTask(
+      projectId: project.id,
+      agentId: first.id,
+      title: 'Task',
+    );
+
+    final firstChat = repository.createChat(taskId: task.id);
+    expect(firstChat.agentId, first.id);
+
+    repository.updateTask(task.copyWith(agentId: second.id));
+    final secondChat = repository.createChat(taskId: task.id);
+    expect(secondChat.agentId, second.id);
   });
 
   test('validates required agent fields and empty messages', () {

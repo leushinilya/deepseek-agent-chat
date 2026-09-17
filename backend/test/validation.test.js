@@ -53,12 +53,38 @@ test('facts are validated and forwarded before recent messages', async () => {
   }
 });
 
+test('task state instructions and completed stage results are forwarded', async () => {
+  const body = {provider: 'deepseek', model: 'deepseek-v4-flash',
+    systemPrompt: 'Original',
+    taskState: {name: 'Planning', description: 'Create a plan; do not implement'},
+    taskStageResults: [{stateName: 'Discovery', result: 'Requirements collected'}],
+    messages: [{role: 'user', content: 'Continue'}]};
+  assert.equal(validateChatInput(body), null);
+  assert.match(validateChatInput({...body, taskState: {name: '', description: 'x'}}), /состояние/);
+  assert.match(validateChatInput({...body, taskStageResults: [{stateName: 'x', result: ''}]}), /этапов/);
+  let forwarded;
+  const deepseek = {async *generateStream(messages) { forwarded = messages; yield 'Answer'; }};
+  const server = createApp({deepseek}).listen(0, '127.0.0.1');
+  try {
+    await new Promise(resolve => server.once('listening', resolve));
+    await fetch(`http://127.0.0.1:${server.address().port}/api/chat`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body),
+    });
+    assert.match(forwarded[0].content, /Create a plan; do not implement/);
+    assert.match(forwarded[0].content, /не переходи к следующим этапам/i);
+    assert.match(forwarded[1].content, /Requirements collected/);
+    assert.equal(forwarded[2].content, 'Continue');
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
 test('working and long-term memory are validated and forwarded separately', async () => {
   const body = {
     provider: 'deepseek',
     model: 'deepseek-v4-flash',
     systemPrompt: 'Original',
-    workingMemory: ['Build login screen'],
+    workingMemory: 'Build login screen',
     longTermMemory: ['User prefers Flutter'],
     messages: [{role: 'user', content: 'Continue'}],
   };

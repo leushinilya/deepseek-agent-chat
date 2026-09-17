@@ -49,8 +49,22 @@ void main() {
             messages: messages,
             summary: 'Prior summary',
             facts: const {'goal': 'Ship'},
-            workingMemory: const ['Finish login screen'],
+            workingMemory: 'Finish login screen',
             longTermMemory: const ['Prefers Flutter'],
+            taskState: const TaskStateDefinition(
+              id: 'planning',
+              name: 'Planning',
+              description: 'Create an implementation plan only',
+              colorValue: 0xFF3659D9,
+            ),
+            taskStageResults: [
+              TaskStageResult(
+                stateId: 'discovery',
+                stateName: 'Discovery',
+                result: 'Requirements collected',
+                completedAt: DateTime.utc(2026),
+              ),
+            ],
             userProfile: const UserProfile(
                 name: 'Anna', style: 'Concise', format: 'Bullets')))
         .events
@@ -61,8 +75,15 @@ void main() {
     expect(body['systemPrompt'], 'System only');
     expect(body['contextSummary'], 'Prior summary');
     expect(body['contextFacts'], {'goal': 'Ship'});
-    expect(body['workingMemory'], ['Finish login screen']);
+    expect(body['workingMemory'], 'Finish login screen');
     expect(body['longTermMemory'], ['Prefers Flutter']);
+    expect(body['taskState'], {
+      'name': 'Planning',
+      'description': 'Create an implementation plan only'
+    });
+    expect(body['taskStageResults'], [
+      {'stateName': 'Discovery', 'result': 'Requirements collected'}
+    ]);
     expect(body['userProfile'],
         {'name': 'Anna', 'style': 'Concise', 'format': 'Bullets'});
     expect(events.whereType<LlmTextDelta>().map((event) => event.text),

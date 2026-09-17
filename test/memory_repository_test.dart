@@ -23,14 +23,18 @@ void main() {
       model: AgentModel.deepseekFlash,
     );
     project = repository.createProject(title: 'Memory project');
-    task = repository.createTask(projectId: project.id, title: 'Memory task');
-    firstChat = repository.createChat(agentId: agent.id, taskId: task.id);
+    task = repository.createTask(
+      projectId: project.id,
+      agentId: agent.id,
+      title: 'Memory task',
+    );
+    firstChat = repository.createChat(taskId: task.id);
   });
 
   test('stores dialogue, working and long-term memory under separate keys',
       () async {
     repository.appendMessage(firstChat.id, ChatRole.user, 'Current message');
-    repository.rememberWorking(task.id, 'Current goal');
+    repository.updateWorkingMemory(task.id, 'Current goal');
     repository.rememberLongTerm(project.id, 'Prefers Flutter');
     await repository.settled;
 
@@ -43,8 +47,7 @@ void main() {
         reason: 'История должна храниться отдельно от метаданных чата.');
     expect(jsonDecode(store.values[shortKey]!)['messages'].single['content'],
         'Current message');
-    expect(jsonDecode(store.values[workingKey]!)['items'].single['content'],
-        'Current goal');
+    expect(jsonDecode(store.values[workingKey]!)['content'], 'Current goal');
     expect(jsonDecode(store.values[longKey]!)['items'].single['content'],
         'Prefers Flutter');
   });
@@ -53,10 +56,10 @@ void main() {
       () async {
     final secondChat =
         repository.createChat(agentId: agent.id, taskId: task.id);
-    repository.rememberWorking(task.id, 'Shared task memory');
+    repository.updateWorkingMemory(task.id, 'Shared task memory');
     repository.rememberLongTerm(project.id, 'Shared profile');
 
-    expect(repository.workingMemory(secondChat.taskId).items.single.content,
+    expect(repository.workingMemory(secondChat.taskId).content,
         'Shared task memory');
     expect(repository.longTermMemory(project.id).items.single.content,
         'Shared profile');
@@ -65,22 +68,28 @@ void main() {
   test('different tasks have isolated working memory', () {
     final otherTask =
         repository.createTask(projectId: project.id, title: 'Other task');
-    repository.rememberWorking(task.id, 'Only first task');
-    expect(repository.workingMemory(otherTask.id).items, isEmpty);
+    repository.updateWorkingMemory(task.id, 'Only first task');
+    expect(repository.workingMemory(otherTask.id).content, isEmpty);
   });
 
-  test('task requires project and chat requires both agent and task', () {
+  test('task requires project and valid agent; chat requires task', () {
     expect(() => repository.createTask(projectId: 'missing', title: 'Invalid'),
         throwsStateError);
+    expect(
+      () => repository.createTask(
+        projectId: project.id,
+        agentId: 'missing',
+        title: 'Invalid',
+      ),
+      throwsStateError,
+    );
     expect(() => repository.createChat(agentId: agent.id, taskId: 'missing'),
-        throwsStateError);
-    expect(() => repository.createChat(agentId: 'missing', taskId: task.id),
         throwsStateError);
   });
 
   test('restores each memory type independently', () async {
     repository.appendMessage(firstChat.id, ChatRole.user, 'Saved dialogue');
-    repository.rememberWorking(task.id, 'Saved task');
+    repository.updateWorkingMemory(task.id, 'Saved task');
     repository.rememberLongTerm(project.id, 'Saved knowledge');
     await repository.settled;
 
@@ -88,7 +97,7 @@ void main() {
     await restored.load();
     expect(restored.chatById(firstChat.id)!.messages.single.content,
         'Saved dialogue');
-    expect(restored.workingMemory(task.id).items.single.content, 'Saved task');
+    expect(restored.workingMemory(task.id).content, 'Saved task');
     expect(restored.longTermMemory(project.id).items.single.content,
         'Saved knowledge');
   });
@@ -121,26 +130,25 @@ void main() {
     await restored.load();
     final migratedChat = restored.chatById(firstChat.id)!;
     expect(restored.taskById(migratedChat.taskId), isNotNull);
-    expect(restored.workingMemory(migratedChat.taskId).items.single.content,
+    expect(restored.workingMemory(migratedChat.taskId).content,
         'Legacy task context');
   });
 
   test('ordinary messages do not implicitly enter durable memories', () {
     repository.appendMessage(firstChat.id, ChatRole.user, 'Do not classify me');
-    expect(repository.workingMemory(task.id).items, isEmpty);
+    expect(repository.workingMemory(task.id).content, isEmpty);
     expect(repository.longTermMemory(project.id).items, isEmpty);
   });
 
-  test('deletes individual working and long-term records', () {
-    repository.rememberWorking(task.id, 'Temporary task');
+  test('clears unified working memory and deletes long-term records', () {
+    repository.updateWorkingMemory(task.id, 'Temporary task');
     repository.rememberLongTerm(project.id, 'Outdated preference');
-    final workingId = repository.workingMemory(task.id).items.single.id;
     final longTermId = repository.longTermMemory(project.id).items.single.id;
 
-    repository.deleteWorkingMemoryItem(task.id, workingId);
+    repository.updateWorkingMemory(task.id, '');
     repository.deleteLongTermMemoryItem(project.id, longTermId);
 
-    expect(repository.workingMemory(task.id).items, isEmpty);
+    expect(repository.workingMemory(task.id).content, isEmpty);
     expect(repository.longTermMemory(project.id).items, isEmpty);
   });
 }

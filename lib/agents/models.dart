@@ -182,23 +182,32 @@ class AgentProject {
     required this.title,
     required this.createdAt,
     required this.updatedAt,
+    this.stateModelId,
   });
 
   final String id;
   final String title;
   final DateTime createdAt;
   final DateTime updatedAt;
+  final String? stateModelId;
 
-  AgentProject copyWith({String? title, DateTime? updatedAt}) => AgentProject(
+  AgentProject copyWith({
+    String? title,
+    DateTime? updatedAt,
+    String? stateModelId,
+  }) =>
+      AgentProject(
         id: id,
         title: title ?? this.title,
         createdAt: createdAt,
         updatedAt: updatedAt ?? this.updatedAt,
+        stateModelId: stateModelId ?? this.stateModelId,
       );
 
   Map<String, Object> toJson() => {
         'id': id,
         'title': title,
+        if (stateModelId != null) 'stateModelId': stateModelId!,
         'createdAt': createdAt.toIso8601String(),
         'updatedAt': updatedAt.toIso8601String(),
       };
@@ -206,8 +215,115 @@ class AgentProject {
   factory AgentProject.fromJson(Map<String, dynamic> json) => AgentProject(
         id: json['id'] as String,
         title: json['title'] as String,
+        stateModelId: json['stateModelId'] as String?,
         createdAt: DateTime.parse(json['createdAt'] as String),
         updatedAt: DateTime.parse(json['updatedAt'] as String),
+      );
+}
+
+class TaskStateDefinition {
+  const TaskStateDefinition({
+    required this.id,
+    required this.name,
+    required this.description,
+    required this.colorValue,
+  });
+
+  final String id;
+  final String name;
+  final String description;
+  final int colorValue;
+
+  Map<String, Object> toJson() => {
+        'id': id,
+        'name': name,
+        'description': description,
+        'colorValue': colorValue,
+      };
+
+  factory TaskStateDefinition.fromJson(Map<String, dynamic> json) =>
+      TaskStateDefinition(
+        id: json['id'] as String,
+        name: json['name'] as String,
+        description: json['description'] as String,
+        colorValue: json['colorValue'] as int,
+      );
+}
+
+class TaskStateModel {
+  const TaskStateModel({
+    required this.id,
+    required this.title,
+    required this.states,
+    required this.createdAt,
+    required this.updatedAt,
+  });
+
+  final String id;
+  final String title;
+  final List<TaskStateDefinition> states;
+  final DateTime createdAt;
+  final DateTime updatedAt;
+
+  TaskStateModel copyWith({
+    String? title,
+    List<TaskStateDefinition>? states,
+    DateTime? updatedAt,
+  }) =>
+      TaskStateModel(
+        id: id,
+        title: title ?? this.title,
+        states: states ?? this.states,
+        createdAt: createdAt,
+        updatedAt: updatedAt ?? this.updatedAt,
+      );
+
+  Map<String, Object> toJson() => {
+        'id': id,
+        'title': title,
+        'states': states.map((state) => state.toJson()).toList(),
+        'createdAt': createdAt.toIso8601String(),
+        'updatedAt': updatedAt.toIso8601String(),
+      };
+
+  factory TaskStateModel.fromJson(Map<String, dynamic> json) => TaskStateModel(
+        id: json['id'] as String,
+        title: json['title'] as String,
+        states: (json['states'] as List<dynamic>? ?? const [])
+            .map((value) =>
+                TaskStateDefinition.fromJson(value as Map<String, dynamic>))
+            .toList(growable: false),
+        createdAt: DateTime.parse(json['createdAt'] as String),
+        updatedAt: DateTime.parse(json['updatedAt'] as String),
+      );
+}
+
+class TaskStageResult {
+  const TaskStageResult({
+    required this.stateId,
+    required this.stateName,
+    required this.result,
+    required this.completedAt,
+  });
+
+  final String stateId;
+  final String stateName;
+  final String result;
+  final DateTime completedAt;
+
+  Map<String, Object> toJson() => {
+        'stateId': stateId,
+        'stateName': stateName,
+        'result': result,
+        'completedAt': completedAt.toIso8601String(),
+      };
+
+  factory TaskStageResult.fromJson(Map<String, dynamic> json) =>
+      TaskStageResult(
+        stateId: json['stateId'] as String,
+        stateName: json['stateName'] as String,
+        result: json['result'] as String,
+        completedAt: DateTime.parse(json['completedAt'] as String),
       );
 }
 
@@ -218,26 +334,47 @@ class AgentTask {
     required this.title,
     required this.createdAt,
     required this.updatedAt,
+    this.currentStateId,
+    this.stageResults = const [],
+    this.agentId,
   });
 
   final String id;
   final String projectId;
   final String title;
+  final String? agentId;
   final DateTime createdAt;
   final DateTime updatedAt;
+  final String? currentStateId;
+  final List<TaskStageResult> stageResults;
 
-  AgentTask copyWith({String? title, DateTime? updatedAt}) => AgentTask(
+  AgentTask copyWith({
+    String? title,
+    Object? agentId = _unset,
+    DateTime? updatedAt,
+    Object? currentStateId = _unset,
+    List<TaskStageResult>? stageResults,
+  }) =>
+      AgentTask(
         id: id,
         projectId: projectId,
         title: title ?? this.title,
+        agentId: identical(agentId, _unset) ? this.agentId : agentId as String?,
         createdAt: createdAt,
         updatedAt: updatedAt ?? this.updatedAt,
+        currentStateId: identical(currentStateId, _unset)
+            ? this.currentStateId
+            : currentStateId as String?,
+        stageResults: stageResults ?? this.stageResults,
       );
 
   Map<String, Object> toJson() => {
         'id': id,
         'projectId': projectId,
         'title': title,
+        if (agentId != null) 'agentId': agentId!,
+        if (currentStateId != null) 'currentStateId': currentStateId!,
+        'stageResults': stageResults.map((result) => result.toJson()).toList(),
         'createdAt': createdAt.toIso8601String(),
         'updatedAt': updatedAt.toIso8601String(),
       };
@@ -246,10 +383,18 @@ class AgentTask {
         id: json['id'] as String,
         projectId: json['projectId'] as String? ?? json['agentId'] as String,
         title: json['title'] as String,
+        agentId: json['agentId'] as String?,
+        currentStateId: json['currentStateId'] as String?,
+        stageResults: (json['stageResults'] as List<dynamic>? ?? const [])
+            .map((value) =>
+                TaskStageResult.fromJson(value as Map<String, dynamic>))
+            .toList(growable: false),
         createdAt: DateTime.parse(json['createdAt'] as String),
         updatedAt: DateTime.parse(json['updatedAt'] as String),
       );
 }
+
+const _unset = Object();
 
 class AgentChat {
   const AgentChat({

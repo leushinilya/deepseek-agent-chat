@@ -74,6 +74,7 @@ class ProjectsPage extends StatelessWidget {
 
   Widget _card(BuildContext context, AgentProject project) {
     final items = repository.longTermMemory(project.id).items;
+    final stateModel = repository.stateModelById(project.stateModelId);
     return AppSurface(
       padding: const EdgeInsets.all(18),
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
@@ -104,6 +105,29 @@ class ProjectsPage extends StatelessWidget {
             icon: const Icon(Icons.delete_outline_rounded),
           ),
         ]),
+        const SizedBox(height: 12),
+        DropdownButtonFormField<String>(
+          key: Key('projectStateModel-${project.id}'),
+          initialValue: stateModel?.id,
+          decoration: const InputDecoration(
+            labelText: 'Модель состояний',
+            helperText: 'При смене модели прогресс этапов задач сбрасывается.',
+          ),
+          hint: const Text('Не назначена'),
+          items: repository.stateModels
+              .map((model) => DropdownMenuItem(
+                    value: model.id,
+                    child: Text(model.title),
+                  ))
+              .toList(),
+          onChanged: repository.stateModels.isEmpty
+              ? null
+              : (value) {
+                  if (value != null && value != project.stateModelId) {
+                    repository.assignStateModelToProject(project.id, value);
+                  }
+                },
+        ),
         const SizedBox(height: 12),
         if (items.isEmpty)
           const Text('Долговременная память проекта пуста.',

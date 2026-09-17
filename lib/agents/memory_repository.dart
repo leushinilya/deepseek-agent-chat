@@ -74,12 +74,12 @@ class MemoryRepository {
     _write(shortTermStorageKey(chatId), value.toJson());
   }
 
-  void rememberWorking(String taskId, String content) {
-    final current = workingFor(taskId);
-    final value = WorkingMemory(
-      taskId: taskId,
-      items: [...current.items, _item(content)],
-    );
+  void saveWorking(String taskId, String content) {
+    final cleaned = content.trim();
+    if (cleaned.length > 24000) {
+      throw ArgumentError('Рабочая память не должна превышать 24000 символов.');
+    }
+    final value = WorkingMemory(taskId: taskId, content: cleaned);
     _working[taskId] = value;
     _write(workingStorageKey(taskId), value.toJson());
   }
@@ -92,16 +92,6 @@ class MemoryRepository {
     );
     _longTerm[projectId] = value;
     _write(longTermStorageKey(projectId), value.toJson());
-  }
-
-  void deleteWorkingItem(String taskId, String itemId) {
-    final current = workingFor(taskId);
-    final value = WorkingMemory(
-      taskId: taskId,
-      items: current.items.where((item) => item.id != itemId).toList(),
-    );
-    _working[taskId] = value;
-    _write(workingStorageKey(taskId), value.toJson());
   }
 
   void deleteLongTermItem(String projectId, String itemId) {

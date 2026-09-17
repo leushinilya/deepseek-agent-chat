@@ -82,7 +82,7 @@ class _ChatPageState extends State<ChatPage> {
     if (chat == null) return;
     if (!(_compressionForm.currentState?.validate() ?? true)) return;
     final task = widget.repository.taskById(chat.taskId);
-    final agent = widget.repository.agentById(chat.agentId);
+    final agent = widget.repository.agentById(task?.agentId ?? chat.agentId);
     final project =
         task == null ? null : widget.repository.projectById(task.projectId);
     if (task == null || agent == null || project == null) {
@@ -164,9 +164,11 @@ class _ChatPageState extends State<ChatPage> {
           facts: contextChat.contextStrategy == ContextStrategy.stickyFacts
               ? contextChat.facts
               : const {},
-          workingMemory: working.items.map((item) => item.content).toList(),
+          workingMemory: working.content,
           longTermMemory: longTerm.items.map((item) => item.content).toList(),
-          userProfile: widget.repository.userProfile),
+          userProfile: widget.repository.userProfile,
+          taskState: widget.repository.currentStateForTask(task),
+          taskStageResults: task.stageResults),
     );
     _operation = operation;
     _subscription = operation.events.listen(
@@ -230,8 +232,10 @@ class _ChatPageState extends State<ChatPage> {
   Future<void> _refreshFacts({bool rebuild = true}) async {
     if (_generating) return;
     final chat = widget.repository.chatById(widget.chatId);
-    final agent =
-        chat == null ? null : widget.repository.agentById(chat.agentId);
+    final task = chat == null ? null : widget.repository.taskById(chat.taskId);
+    final agent = chat == null
+        ? null
+        : widget.repository.agentById(task?.agentId ?? chat.agentId);
     if (chat == null || agent == null) return;
     if (!chat.messages.any((message) => message.role == ChatRole.user)) return;
     setState(() {
@@ -298,11 +302,14 @@ class _ChatPageState extends State<ChatPage> {
           final chat = widget.repository.chatById(widget.chatId);
           final task =
               chat == null ? null : widget.repository.taskById(chat.taskId);
-          final agent =
-              chat == null ? null : widget.repository.agentById(chat.agentId);
+          final agent = chat == null
+              ? null
+              : widget.repository.agentById(task?.agentId ?? chat.agentId);
           final project = task == null
               ? null
               : widget.repository.projectById(task.projectId);
+          final taskState =
+              task == null ? null : widget.repository.currentStateForTask(task);
           if (chat == null ||
               task == null ||
               agent == null ||
@@ -316,9 +323,8 @@ class _ChatPageState extends State<ChatPage> {
               ? 0
               : estimateTokenCount(agent.systemPrompt) +
                   estimateTokenCount(chat.activeSummary) +
-                  widget.repository.workingMemory(chat.taskId).items.fold<int>(
-                      0,
-                      (sum, item) => sum + estimateTokenCount(item.content)) +
+                  estimateTokenCount(
+                      widget.repository.workingMemory(chat.taskId).content) +
                   widget.repository.longTermMemory(project.id).items.fold<int>(
                       0,
                       (sum, item) => sum + estimateTokenCount(item.content)) +
@@ -362,7 +368,7 @@ class _ChatPageState extends State<ChatPage> {
               chat.messages.length - hiddenCount + contextItems;
           return Scaffold(
             appBar: AppBar(
-              toolbarHeight: 92,
+              toolbarHeight: 108,
               title: Row(children: [
                 Expanded(
                     child: Column(
@@ -378,6 +384,31 @@ class _ChatPageState extends State<ChatPage> {
                               fontSize: 12,
                               fontWeight: FontWeight.w400,
                               color: Color(0xFF667085))),
+                      const SizedBox(height: 3),
+                      Row(children: [
+                        const Text('Состояние задачи: ',
+                            style: TextStyle(
+                                fontSize: 11, color: Color(0xFF667085))),
+                        Expanded(
+                          child: Text(
+                            taskState == null
+                                ? 'не настроено'
+                                : widget.repository.isTaskComplete(task)
+                                    ? '${taskState.name} · завершено'
+                                    : taskState.name,
+                            key: const Key('chatTaskState'),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              color: taskState == null
+                                  ? const Color(0xFF667085)
+                                  : Color(taskState.colorValue),
+                            ),
+                          ),
+                        ),
+                      ]),
                       const SizedBox(height: 5),
                       Semantics(
                         label:
@@ -602,6 +633,7 @@ class _ChatPageState extends State<ChatPage> {
                                   ),
                                 ]),
                               ),
+                            _taskStateAction(task, taskState),
                             _composer(),
                           ]),
                         ),
@@ -628,6 +660,35 @@ class _ChatPageState extends State<ChatPage> {
           );
         },
       );
+
+  Widget _taskStateAction(AgentTask task, TaskStateDefinition? currentState) {
+    final nextState = widget.repository.nextStateForTask(task);
+    final chat = widget.repository.chatById(widget.chatId);
+    final hasLlmResult = chat != null &&
+        chat.messages.isNotEmpty &&
+        chat.messages.last.role == ChatRole.assistant;
+    final resultAlreadySaved = currentState != null &&
+        task.stageResults.any((result) => result.stateId == currentState.id);
+    if (currentState == null || !hasLlmResult || resultAlreadySaved) {
+      return const SizedBox.shrink();
+    }
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+      child: FilledButton.icon(
+        key: const Key('advanceTaskStateInChat'),
+        onPressed: _generating
+            ? null
+            : () => widget.repository.completeCurrentTaskState(
+                  task.id,
+                  chat.messages.last.content,
+                ),
+        icon: const Icon(Icons.arrow_forward_rounded),
+        label: Text(nextState == null
+            ? 'Сохранить результат этапа «${currentState.name}»'
+            : 'Завершить «${currentState.name}» и перейти в «${nextState.name}»'),
+      ),
+    );
+  }
 
   Widget _slidingWindowBlock(int hiddenCount, bool showUnused) => Container(
         key: const Key('chatSlidingWindowSummary'),

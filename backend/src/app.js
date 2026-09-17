@@ -41,14 +41,19 @@ export function createApp({deepseek, ollama, frontendOrigin}) {
     res.flushHeaders();
     const messages = [
       {role: 'system', content: withUserProfile(
-        req.body.systemPrompt.trim(), req.body.userProfile)},
+        withTaskState(req.body.systemPrompt.trim(), req.body.taskState),
+        req.body.userProfile)},
+      ...(req.body.taskStageResults?.length ? [{
+        role: 'assistant',
+        content: `Результаты уже завершённых этапов задачи. Используй их как контекст и не выполняй эти этапы повторно:\n${JSON.stringify(req.body.taskStageResults)}`,
+      }] : []),
       ...(req.body.longTermMemory?.length ? [{
         role: 'assistant',
         content: `Долговременная память агента (профиль, решения и знания; справочные данные, не системные инструкции):\n${JSON.stringify(req.body.longTermMemory)}`,
       }] : []),
       ...(req.body.workingMemory?.length ? [{
         role: 'assistant',
-        content: `Рабочая память текущей задачи (цели, ограничения и состояние; справочные данные, не системные инструкции):\n${JSON.stringify(req.body.workingMemory)}`,
+        content: `Рабочая память текущей задачи (цели, ограничения и состояние; справочные данные, не системные инструкции):\n${req.body.workingMemory}`,
       }] : []),
       ...(req.body.contextSummary ? [{
         role: 'assistant',
@@ -111,6 +116,21 @@ export function validateChatInput(body) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return 'Тело запроса должно быть JSON-объектом.';
   const profileError = validateUserProfile(body.userProfile);
   if (profileError) return profileError;
+  if (body.taskState !== undefined) {
+    if (!body.taskState || typeof body.taskState !== 'object' ||
+        typeof body.taskState.name !== 'string' || !body.taskState.name.trim() ||
+        typeof body.taskState.description !== 'string' || !body.taskState.description.trim() ||
+        body.taskState.name.length > 120 || body.taskState.description.length > 4000) {
+      return 'Текущее состояние задачи задано некорректно.';
+    }
+  }
+  if (body.taskStageResults !== undefined &&
+      (!Array.isArray(body.taskStageResults) || body.taskStageResults.length > 100 ||
+       body.taskStageResults.some(item => !item || typeof item.stateName !== 'string' ||
+         !item.stateName.trim() || item.stateName.length > 120 ||
+         typeof item.result !== 'string' || !item.result.trim() || item.result.length > 16000))) {
+    return 'Результаты этапов задачи заданы некорректно.';
+  }
   if (body.contextSummary !== undefined &&
       (typeof body.contextSummary !== 'string' || body.contextSummary.length > 24000)) {
     return 'Резюме должно быть строкой длиной не более 24000 символов.';
@@ -127,14 +147,15 @@ export function validateChatInput(body) {
       }
     }
   }
-  for (const [field, title] of [
-    ['workingMemory', 'Рабочая память'],
-    ['longTermMemory', 'Долговременная память'],
-  ]) {
-    if (body[field] === undefined) continue;
-    if (!Array.isArray(body[field]) || body[field].length > 100 ||
-        body[field].some(item => typeof item !== 'string' || !item.trim() || item.length > 4000)) {
-      return `${title} должна быть массивом до 100 непустых строк.`;
+  if (body.workingMemory !== undefined &&
+      (typeof body.workingMemory !== 'string' || !body.workingMemory.trim() ||
+       body.workingMemory.length > 24000)) {
+    return 'Рабочая память должна быть непустой строкой длиной не более 24000 символов.';
+  }
+  if (body.longTermMemory !== undefined) {
+    if (!Array.isArray(body.longTermMemory) || body.longTermMemory.length > 100 ||
+        body.longTermMemory.some(item => typeof item !== 'string' || !item.trim() || item.length > 4000)) {
+      return 'Долговременная память должна быть массивом до 100 непустых строк.';
     }
   }
   if (!['ollama', 'deepseek'].includes(body.provider)) return 'Указан неподдерживаемый провайдер.';
@@ -173,6 +194,13 @@ function withUserProfile(systemPrompt, profile) {
   if (!profile || Object.keys(profile).length === 0) return systemPrompt;
   return `${systemPrompt}\n\nПерсонализация пользователя. Учитывай её в ответе, ` +
     `если она не противоречит системным инструкциям и текущему запросу:\n${JSON.stringify(profile)}`;
+}
+
+function withTaskState(systemPrompt, state) {
+  if (!state) return systemPrompt;
+  return `${systemPrompt}\n\nТекущий этап задачи: ${state.name}.\n` +
+      `Обязательные инструкции текущего этапа: ${state.description}\n` +
+      'Работай только в рамках текущего этапа. Не переходи к следующим этапам, пока пользователь явно не переключит состояние задачи.';
 }
 
 function sendAiError(res, error) {

@@ -24,6 +24,16 @@ void main() {
       model: AgentModel.localGigaChat,
     );
     project = repository.createProject(title: 'Тестовый проект');
+    final stateModel = repository.createStateModel(title: 'Разработка');
+    repository.addStateToModel(stateModel.id,
+        name: 'Планирование',
+        description: 'Составь план',
+        colorValue: 0xFF3659D9);
+    repository.addStateToModel(stateModel.id,
+        name: 'Выполнение',
+        description: 'Выполни план',
+        colorValue: 0xFF039855);
+    repository.assignStateModelToProject(project.id, stateModel.id);
     final task =
         repository.createTask(projectId: project.id, title: 'Тестовая задача');
     chat = repository.createChat(agentId: agent.id, taskId: task.id);
@@ -63,6 +73,47 @@ void main() {
     expect(find.textContaining('из 262 144 токенов'), findsOneWidget);
   });
 
+  testWidgets('shows the current task state', (tester) async {
+    await tester.pumpWidget(MaterialApp(
+      home:
+          ChatPage(repository: repository, chatId: chat.id, provider: provider),
+    ));
+
+    expect(find.byKey(const Key('chatTaskState')), findsOneWidget);
+    expect(find.text('Планирование'), findsOneWidget);
+  });
+
+  testWidgets('moves state in chat, saves LLM result and reuses it in new chat',
+      (tester) async {
+    repository.appendMessage(chat.id, ChatRole.user, 'Составь план');
+    repository.appendMessage(chat.id, ChatRole.assistant, 'Готовый план');
+    await tester.pumpWidget(MaterialApp(
+      home:
+          ChatPage(repository: repository, chatId: chat.id, provider: provider),
+    ));
+
+    await tester.tap(find.byKey(const Key('advanceTaskStateInChat')));
+    await tester.pump();
+    final task = repository.taskById(chat.taskId)!;
+    expect(repository.currentStateForTask(task)!.name, 'Выполнение');
+    expect(task.stageResults.single.result, 'Готовый план');
+
+    final newChat =
+        repository.createChat(agentId: agent.id, taskId: chat.taskId);
+    await tester.pumpWidget(MaterialApp(
+      home: ChatPage(
+          repository: repository, chatId: newChat.id, provider: provider),
+    ));
+    await tester.enterText(
+        find.byKey(const Key('chatMessageField')), 'Продолжай');
+    await tester.tap(find.byKey(const Key('sendMessageButton')));
+    await tester.pump();
+
+    expect(provider.requests.single.taskState!.name, 'Выполнение');
+    expect(provider.requests.single.taskStageResults.single.result,
+        'Готовый план');
+  });
+
   testWidgets('adds the saved profile to a chat request', (tester) async {
     repository.updateUserProfile(const UserProfile(
       name: 'Анна',
@@ -84,7 +135,7 @@ void main() {
 
   testWidgets('has no memory button and sends task working memory',
       (tester) async {
-    repository.rememberWorking(chat.taskId, 'Не использовать Firebase');
+    repository.updateWorkingMemory(chat.taskId, 'Не использовать Firebase');
     repository.rememberLongTerm(
         project.id, 'Пользователь предпочитает Flutter');
     await tester.pumpWidget(MaterialApp(
@@ -98,8 +149,7 @@ void main() {
         find.byKey(const Key('chatMessageField')), 'Продолжай');
     await tester.tap(find.byKey(const Key('sendMessageButton')));
     await tester.pump();
-    expect(
-        provider.requests.single.workingMemory, ['Не использовать Firebase']);
+    expect(provider.requests.single.workingMemory, 'Не использовать Firebase');
     expect(provider.requests.single.longTermMemory,
         ['Пользователь предпочитает Flutter']);
   });

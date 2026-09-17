@@ -7,12 +7,10 @@ import '../widgets/app_surface.dart';
 class AgentsPage extends StatelessWidget {
   const AgentsPage({
     required this.repository,
-    required this.onShowChats,
     super.key,
   });
 
   final AgentChatRepository repository;
-  final VoidCallback onShowChats;
 
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
@@ -114,11 +112,6 @@ class AgentsPage extends StatelessWidget {
             ]),
           ),
           IconButton(
-            tooltip: 'Новый чат',
-            onPressed: () => _createChat(context, agent),
-            icon: const Icon(Icons.add_comment_outlined),
-          ),
-          IconButton(
             key: Key('editAgent-${agent.id}'),
             tooltip: 'Редактировать',
             onPressed: () => _edit(context, agent),
@@ -154,45 +147,18 @@ class AgentsPage extends StatelessWidget {
     }
   }
 
-  Future<void> _createChat(BuildContext context, AiAgent agent) async {
-    final tasks = repository.tasks;
-    if (tasks.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Сначала создайте хотя бы одну задачу.')));
-      return;
-    }
-    final taskId = await showDialog<String>(
-      context: context,
-      builder: (context) => SimpleDialog(
-        title: const Text('Выберите задачу для чата'),
-        children: [
-          for (final task in tasks)
-            SimpleDialogOption(
-              key: Key('selectAgentTask-${task.id}'),
-              onPressed: () => Navigator.pop(context, task.id),
-              child: ListTile(
-                leading: const Icon(Icons.task_alt_outlined),
-                title: Text(task.title),
-                subtitle: Text(repository.projectById(task.projectId)?.title ??
-                    'Проект недоступен'),
-              ),
-            ),
-        ],
-      ),
-    );
-    if (taskId == null) return;
-    repository.createChat(agentId: agent.id, taskId: taskId);
-    onShowChats();
-  }
-
   Future<void> _delete(BuildContext context, AiAgent agent) async {
-    final count = repository.chatCountForAgent(agent.id);
-    if (count > 0) {
+    final taskCount = repository.taskCountForAgent(agent.id);
+    final chatCount = repository.chatCountForAgent(agent.id);
+    if (taskCount > 0 || chatCount > 0) {
       await showDialog<void>(
         context: context,
         builder: (context) => AlertDialog(
           title: const Text('Нельзя удалить агента'),
-          content: Text('С агентом связаны чаты: $count. Сначала удалите их.'),
+          content: Text(
+            'С агентом связаны задачи: $taskCount, чаты: $chatCount. '
+            'Сначала назначьте задачам другого агента и удалите его чаты.',
+          ),
           actions: [
             TextButton(
                 onPressed: () => Navigator.pop(context),

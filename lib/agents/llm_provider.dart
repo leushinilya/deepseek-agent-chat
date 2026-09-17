@@ -12,17 +12,21 @@ class LlmRequest {
     required this.messages,
     this.summary = '',
     this.facts = const {},
-    this.workingMemory = const [],
+    this.workingMemory = '',
     this.longTermMemory = const [],
     this.userProfile = const UserProfile(),
+    this.taskState,
+    this.taskStageResults = const [],
   });
   final AiAgent agent;
   final List<ChatMessage> messages;
   final String summary;
   final Map<String, String> facts;
-  final List<String> workingMemory;
+  final String workingMemory;
   final List<String> longTermMemory;
   final UserProfile userProfile;
+  final TaskStateDefinition? taskState;
+  final List<TaskStageResult> taskStageResults;
 }
 
 sealed class LlmEvent {
@@ -100,6 +104,18 @@ class BackendLlmProvider implements LlmProvider {
                   'longTermMemory': request.longTermMemory,
                 if (!request.userProfile.isEmpty)
                   'userProfile': request.userProfile.toJson(),
+                if (request.taskState != null)
+                  'taskState': {
+                    'name': request.taskState!.name,
+                    'description': request.taskState!.description,
+                  },
+                if (request.taskStageResults.isNotEmpty)
+                  'taskStageResults': request.taskStageResults
+                      .map((result) => {
+                            'stateName': result.stateName,
+                            'result': result.result,
+                          })
+                      .toList(),
               });
         final response = await client.send(httpRequest).timeout(
               const Duration(seconds: 30),

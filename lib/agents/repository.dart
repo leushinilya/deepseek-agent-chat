@@ -35,7 +35,7 @@ class AgentChatRepository extends ChangeNotifier {
       : memory = MemoryRepository(_store, clock: _clock);
 
   static const _storageKey = 'ai_agents_and_chats_v1';
-  static const _schemaVersion = 4;
+  static const _schemaVersion = 8;
 
   final KeyValueStore _store;
   final DateTime Function() _clock;
@@ -43,6 +43,7 @@ class AgentChatRepository extends ChangeNotifier {
   final _random = Random();
   final List<AiAgent> _agents = [];
   final List<AgentProject> _projects = [];
+  final List<TaskStateModel> _stateModels = [];
   final List<AgentTask> _tasks = [];
   final List<AgentChat> _chats = [];
   UserProfile _userProfile = const UserProfile();
@@ -57,6 +58,8 @@ class AgentChatRepository extends ChangeNotifier {
       ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
     return List.unmodifiable(result);
   }
+
+  List<TaskStateModel> get stateModels => List.unmodifiable(_stateModels);
 
   List<AgentTask> get tasks {
     final result = [..._tasks]
@@ -95,6 +98,10 @@ class AgentChatRepository extends ChangeNotifier {
           ..clear()
           ..addAll((json['projects'] as List<dynamic>? ?? const []).map(
               (item) => AgentProject.fromJson(item as Map<String, dynamic>)));
+        _stateModels
+          ..clear()
+          ..addAll((json['stateModels'] as List<dynamic>? ?? const []).map(
+              (item) => TaskStateModel.fromJson(item as Map<String, dynamic>)));
         _tasks
           ..clear()
           ..addAll((json['tasks'] as List<dynamic>? ?? const [])
@@ -103,6 +110,14 @@ class AgentChatRepository extends ChangeNotifier {
           ..clear()
           ..addAll((json['chats'] as List<dynamic>? ?? const [])
               .map((item) => AgentChat.fromJson(item as Map<String, dynamic>)));
+        for (var index = 0; index < _tasks.length; index++) {
+          final task = _tasks[index];
+          if (task.agentId != null) continue;
+          final linkedChats = _chats.where((chat) => chat.taskId == task.id);
+          if (linkedChats.isNotEmpty) {
+            _tasks[index] = task.copyWith(agentId: linkedChats.first.agentId);
+          }
+        }
         for (final chat in _chats) {
           if (_tasks.any((task) => task.id == chat.taskId)) continue;
           _tasks.add(AgentTask(
@@ -207,7 +222,9 @@ class AgentChatRepository extends ChangeNotifier {
   }
 
   void deleteAgent(String id) {
-    final linked = _chats.where((chat) => chat.agentId == id).length;
+    final linkedTasks = _tasks.where((task) => task.agentId == id).length;
+    final linkedChats = _chats.where((chat) => chat.agentId == id).length;
+    final linked = linkedTasks + linkedChats;
     if (linked > 0) throw AgentHasChatsException(linked);
     _agents.removeWhere((agent) => agent.id == id);
     _changed();
@@ -224,6 +241,88 @@ class AgentChatRepository extends ChangeNotifier {
     _projects.add(project);
     _changed();
     return project;
+  }
+
+  TaskStateModel createStateModel({required String title}) {
+    final now = _clock();
+    final model = TaskStateModel(
+      id: _id('state-model'),
+      title: _required(title, 'Введите название модели состояний.'),
+      states: const [],
+      createdAt: now,
+      updatedAt: now,
+    );
+    _stateModels.add(model);
+    _changed();
+    return model;
+  }
+
+  TaskStateDefinition addStateToModel(
+    String modelId, {
+    required String name,
+    required String description,
+    required int colorValue,
+  }) {
+    final index = _stateModels.indexWhere((model) => model.id == modelId);
+    if (index < 0) throw StateError('State model not found');
+    final state = TaskStateDefinition(
+      id: _id('state'),
+      name: _required(name, 'Введите название состояния.'),
+      description: _required(description, 'Введите описание состояния.'),
+      colorValue: colorValue,
+    );
+    final model = _stateModels[index];
+    _stateModels[index] = model.copyWith(
+      states: [...model.states, state],
+      updatedAt: _clock(),
+    );
+    _changed();
+    return state;
+  }
+
+  void moveState(String modelId, String stateId, int offset) {
+    final index = _stateModels.indexWhere((model) => model.id == modelId);
+    if (index < 0) throw StateError('State model not found');
+    final model = _stateModels[index];
+    final states = [...model.states];
+    final from = states.indexWhere((state) => state.id == stateId);
+    final to = from + offset;
+    if (from < 0 || to < 0 || to >= states.length) return;
+    final state = states.removeAt(from);
+    states.insert(to, state);
+    _stateModels[index] = model.copyWith(states: states, updatedAt: _clock());
+    _changed();
+  }
+
+  void deleteStateModel(String id) {
+    if (_projects.any((project) => project.stateModelId == id)) {
+      throw StateError('State model is in use');
+    }
+    _stateModels.removeWhere((model) => model.id == id);
+    _changed();
+  }
+
+  void assignStateModelToProject(String projectId, String modelId) {
+    final projectIndex =
+        _projects.indexWhere((project) => project.id == projectId);
+    if (projectIndex < 0) throw StateError('Project not found');
+    final model = stateModelById(modelId);
+    if (model == null) throw StateError('State model not found');
+    final project = _projects[projectIndex];
+    _projects[projectIndex] = project.copyWith(
+      stateModelId: modelId,
+      updatedAt: _clock(),
+    );
+    for (var index = 0; index < _tasks.length; index++) {
+      final task = _tasks[index];
+      if (task.projectId != projectId) continue;
+      _tasks[index] = task.copyWith(
+        currentStateId: model.states.isEmpty ? null : model.states.first.id,
+        stageResults: const [],
+        updatedAt: _clock(),
+      );
+    }
+    _changed();
   }
 
   void updateProject(AgentProject project) {
@@ -244,15 +343,28 @@ class AgentChatRepository extends ChangeNotifier {
     _changed();
   }
 
-  AgentTask createTask({required String projectId, required String title}) {
+  AgentTask createTask({
+    required String projectId,
+    required String title,
+    String? agentId,
+  }) {
     if (projectById(projectId) == null) throw StateError('Project not found');
+    if (agentId != null && agentById(agentId) == null) {
+      throw StateError('Agent not found');
+    }
     final now = _clock();
     final task = AgentTask(
       id: _id('task'),
       projectId: projectId,
       title: _required(title, 'Введите название задачи.'),
+      agentId: agentId,
       createdAt: now,
       updatedAt: now,
+      currentStateId: () {
+        final states =
+            stateModelById(projectById(projectId)?.stateModelId)?.states;
+        return states == null || states.isEmpty ? null : states.first.id;
+      }(),
     );
     _tasks.add(task);
     _changed();
@@ -262,29 +374,74 @@ class AgentChatRepository extends ChangeNotifier {
   void updateTask(AgentTask task) {
     final index = _tasks.indexWhere((item) => item.id == task.id);
     if (index < 0) throw StateError('Task not found');
-    _tasks[index] = task.copyWith(
+    _tasks[index] = _tasks[index].copyWith(
       title: _required(task.title, 'Введите название задачи.'),
+      agentId: task.agentId,
+      updatedAt: _clock(),
+    );
+    _changed();
+  }
+
+  void completeCurrentTaskState(String taskId, String result) {
+    final index = _tasks.indexWhere((item) => item.id == taskId);
+    if (index < 0) throw StateError('Task not found');
+    final task = _tasks[index];
+    final state = currentStateForTask(task);
+    final model = stateModelForTask(task);
+    if (state == null || model == null) throw StateError('Task has no state');
+    if (task.stageResults.any((item) => item.stateId == state.id)) {
+      throw StateError('Current state result is already saved');
+    }
+    final stateIndex = model.states.indexWhere((item) => item.id == state.id);
+    if (stateIndex < 0) throw StateError('Task state not found');
+    _tasks[index] = task.copyWith(
+      currentStateId: stateIndex + 1 < model.states.length
+          ? model.states[stateIndex + 1].id
+          : state.id,
+      stageResults: [
+        ...task.stageResults,
+        TaskStageResult(
+          stateId: state.id,
+          stateName: state.name,
+          result: _required(result, 'Результат этапа не должен быть пустым.'),
+          completedAt: _clock(),
+        ),
+      ],
       updatedAt: _clock(),
     );
     _changed();
   }
 
   void deleteTask(String id) {
-    final linked = _chats.where((chat) => chat.taskId == id).length;
-    if (linked > 0) throw TaskHasChatsException(linked);
+    if (taskById(id) == null) throw StateError('Task not found');
+    final linkedChatIds = _chats
+        .where((chat) => chat.taskId == id)
+        .map((chat) => chat.id)
+        .toList(growable: false);
+    _chats.removeWhere((chat) => chat.taskId == id);
+    for (final chatId in linkedChatIds) {
+      memory.clearChat(chatId);
+    }
     _tasks.removeWhere((task) => task.id == id);
     memory.clearTask(id);
     _changed();
   }
 
-  AgentChat createChat({required String agentId, required String taskId}) {
-    if (agentById(agentId) == null) throw StateError('Agent not found');
+  AgentChat createChat({String? agentId, required String taskId}) {
     final task = taskById(taskId);
     if (task == null) throw StateError('Task not found');
+    final selectedAgentId = task.agentId ?? agentId;
+    if (selectedAgentId == null || agentById(selectedAgentId) == null) {
+      throw StateError('Task agent not found');
+    }
+    if (task.agentId == null) {
+      final taskIndex = _tasks.indexWhere((item) => item.id == taskId);
+      _tasks[taskIndex] = task.copyWith(agentId: selectedAgentId);
+    }
     final now = _clock();
     final chat = AgentChat(
       id: _id('chat'),
-      agentId: agentId,
+      agentId: selectedAgentId,
       taskId: task.id,
       title: 'Новый чат',
       messages: const [],
@@ -348,15 +505,9 @@ class AgentChatRepository extends ChangeNotifier {
   LongTermMemory longTermMemory(String projectId) =>
       memory.longTermFor(projectId);
 
-  void rememberWorking(String taskId, String content) {
+  void updateWorkingMemory(String taskId, String content) {
     if (taskById(taskId) == null) throw StateError('Task not found');
-    memory.rememberWorking(taskId, content);
-    notifyListeners();
-  }
-
-  void deleteWorkingMemoryItem(String taskId, String itemId) {
-    if (taskById(taskId) == null) throw StateError('Task not found');
-    memory.deleteWorkingItem(taskId, itemId);
+    memory.saveWorking(taskId, content);
     notifyListeners();
   }
 
@@ -504,6 +655,44 @@ class AgentChatRepository extends ChangeNotifier {
     return null;
   }
 
+  TaskStateModel? stateModelById(String? id) {
+    if (id == null) return null;
+    for (final model in _stateModels) {
+      if (model.id == id) return model;
+    }
+    return null;
+  }
+
+  TaskStateModel? stateModelForTask(AgentTask task) =>
+      stateModelById(projectById(task.projectId)?.stateModelId);
+
+  TaskStateDefinition? currentStateForTask(AgentTask task) {
+    final model = stateModelForTask(task);
+    if (model == null || task.currentStateId == null) return null;
+    for (final state in model.states) {
+      if (state.id == task.currentStateId) return state;
+    }
+    return null;
+  }
+
+  TaskStateDefinition? nextStateForTask(AgentTask task) {
+    final model = stateModelForTask(task);
+    final current = currentStateForTask(task);
+    if (model == null || current == null) return null;
+    final index = model.states.indexWhere((state) => state.id == current.id);
+    return index >= 0 && index + 1 < model.states.length
+        ? model.states[index + 1]
+        : null;
+  }
+
+  bool isTaskComplete(AgentTask task) {
+    final model = stateModelForTask(task);
+    if (model == null || model.states.isEmpty) return false;
+    return task.currentStateId == model.states.last.id &&
+        task.stageResults
+            .any((result) => result.stateId == task.currentStateId);
+  }
+
   AgentTask? taskById(String id) {
     for (final task in _tasks) {
       if (task.id == id) return task;
@@ -520,6 +709,9 @@ class AgentChatRepository extends ChangeNotifier {
 
   int chatCountForAgent(String id) =>
       _chats.where((chat) => chat.agentId == id).length;
+
+  int taskCountForAgent(String id) =>
+      _tasks.where((task) => task.agentId == id).length;
 
   int taskCountForProject(String id) =>
       _tasks.where((task) => task.projectId == id).length;
@@ -558,6 +750,7 @@ class AgentChatRepository extends ChangeNotifier {
       'userProfile': _userProfile.toJson(),
       'agents': _agents.map((agent) => agent.toJson()).toList(),
       'projects': _projects.map((project) => project.toJson()).toList(),
+      'stateModels': _stateModels.map((model) => model.toJson()).toList(),
       'tasks': _tasks.map((task) => task.toJson()).toList(),
       'chats':
           _chats.map((chat) => chat.toJson(includeMessages: false)).toList(),

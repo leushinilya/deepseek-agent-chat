@@ -24,22 +24,28 @@ void main() {
     repository.createChat(agentId: agent.id, taskId: task.id);
   });
 
-  testWidgets('tasks page adds and deletes working memory', (tester) async {
+  testWidgets('tasks page edits unified working memory', (tester) async {
     await tester
         .pumpWidget(MaterialApp(home: TasksPage(repository: repository)));
 
-    await tester.tap(find.byKey(Key('addWorkingMemory-${task.id}')));
+    await tester.tap(find.byKey(Key('editWorkingMemory-${task.id}')));
     await tester.pumpAndSettle();
     await tester.enterText(
         find.byKey(const Key('taskMemoryField')), 'Сделать экран входа');
     await tester.tap(find.byKey(const Key('saveTaskMemoryButton')));
     await tester.pumpAndSettle();
 
-    final item = repository.workingMemory(task.id).items.single;
+    expect(find.text('Рабочая память'), findsOneWidget);
     expect(find.text('Сделать экран входа'), findsOneWidget);
-    await tester.tap(find.byKey(Key('deleteWorkingMemory-${item.id}')));
-    await tester.pump();
-    expect(repository.workingMemory(task.id).items, isEmpty);
+    await tester.tap(find.byKey(Key('editWorkingMemory-${task.id}')));
+    await tester.pumpAndSettle();
+    final memoryField =
+        tester.widget<TextField>(find.byKey(const Key('taskMemoryField')));
+    expect(memoryField.controller!.text, 'Сделать экран входа');
+    await tester.enterText(find.byKey(const Key('taskMemoryField')), '');
+    await tester.tap(find.byKey(const Key('saveTaskMemoryButton')));
+    await tester.pumpAndSettle();
+    expect(repository.workingMemory(task.id).content, isEmpty);
   });
 
   testWidgets('new task requires and stores selected project', (tester) async {
@@ -48,6 +54,7 @@ void main() {
     await tester.tap(find.byKey(const Key('createTaskButton')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('taskProjectField')), findsOneWidget);
+    expect(find.byKey(const Key('taskAgentField')), findsOneWidget);
     await tester.enterText(
         find.byKey(const Key('taskTitleField')), 'Новая задача');
     await tester.tap(find.byKey(const Key('saveTaskButton')));
@@ -56,6 +63,85 @@ void main() {
     final created =
         repository.tasks.firstWhere((item) => item.title == 'Новая задача');
     expect(created.projectId, project.id);
+    expect(created.agentId, agent.id);
+  });
+
+  testWidgets('task button opens chats filtered by task', (tester) async {
+    final otherTask =
+        repository.createTask(projectId: project.id, title: 'Другая задача');
+    final ownChat = repository.chats.single;
+    repository.appendMessage(ownChat.id, ChatRole.user, 'Чат экрана входа');
+    final otherChat =
+        repository.createChat(agentId: agent.id, taskId: otherTask.id);
+    repository.appendMessage(otherChat.id, ChatRole.user, 'Чужой чат');
+    await tester
+        .pumpWidget(MaterialApp(home: TasksPage(repository: repository)));
+
+    final chatsButton = find.byKey(Key('taskChats-${task.id}'));
+    await tester.scrollUntilVisible(chatsButton, 300);
+    await tester.pumpAndSettle();
+    await tester.tap(chatsButton);
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Чаты · Экран входа'), findsOneWidget);
+    expect(find.text('Чат экрана входа'), findsOneWidget);
+    expect(find.text('Чужой чат'), findsNothing);
+  });
+
+  testWidgets('task deletion warns and cascades linked chats', (tester) async {
+    final chatId = repository.chats.single.id;
+    await tester
+        .pumpWidget(MaterialApp(home: TasksPage(repository: repository)));
+
+    await tester.tap(find.byKey(Key('deleteTask-${task.id}')));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Все вложенные чаты (1)'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('cancelDeleteTaskButton')));
+    await tester.pumpAndSettle();
+    expect(repository.taskById(task.id), isNotNull);
+    expect(repository.chatById(chatId), isNotNull);
+
+    await tester.tap(find.byKey(Key('deleteTask-${task.id}')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('confirmDeleteTaskButton')));
+    await tester.pumpAndSettle();
+    expect(repository.taskById(task.id), isNull);
+    expect(repository.chatById(chatId), isNull);
+  });
+
+  testWidgets('task card does not contain state transition buttons',
+      (tester) async {
+    await tester
+        .pumpWidget(MaterialApp(home: TasksPage(repository: repository)));
+
+    expect(find.byKey(Key('advanceTaskState-${task.id}')), findsNothing);
+  });
+
+  testWidgets('task card shows completed stage result', (tester) async {
+    final model = repository.createStateModel(title: 'Разработка');
+    repository.addStateToModel(model.id,
+        name: 'План', description: 'Составить план', colorValue: 0xFF3659D9);
+    repository.addStateToModel(model.id,
+        name: 'Работа', description: 'Выполнить план', colorValue: 0xFF039855);
+    repository.assignStateModelToProject(project.id, model.id);
+    repository.completeCurrentTaskState(task.id, 'Результат планирования');
+    await tester
+        .pumpWidget(MaterialApp(home: TasksPage(repository: repository)));
+
+    expect(find.text('Работа'), findsOneWidget);
+    expect(find.text('Выполненные этапы'), findsOneWidget);
+    await tester.tap(find.text('План'));
+    await tester.pumpAndSettle();
+    expect(find.text('Результат планирования'), findsOneWidget);
+    final statusY = tester.getTopLeft(find.text('Работа')).dy;
+    final memoryY = tester.getTopLeft(find.text('Рабочая память')).dy;
+    final stagesY = tester.getTopLeft(find.text('Выполненные этапы')).dy;
+    final chatsY = tester
+        .getTopLeft(find.widgetWithText(FilledButton, 'Чаты задачи (1)'))
+        .dy;
+    expect(statusY, lessThan(memoryY));
+    expect(memoryY, lessThan(stagesY));
+    expect(stagesY, lessThan(chatsY));
   });
 
   testWidgets('project adds and deletes long-term memory', (tester) async {
