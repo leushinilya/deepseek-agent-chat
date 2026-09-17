@@ -168,7 +168,8 @@ class _ChatPageState extends State<ChatPage> {
           longTermMemory: longTerm.items.map((item) => item.content).toList(),
           userProfile: widget.repository.userProfile,
           taskState: widget.repository.currentStateForTask(task),
-          taskStageResults: task.stageResults),
+          taskStageResults: task.stageResults,
+          invariants: project.invariants),
     );
     _operation = operation;
     _subscription = operation.events.listen(
@@ -328,6 +329,12 @@ class _ChatPageState extends State<ChatPage> {
                   widget.repository.longTermMemory(project.id).items.fold<int>(
                       0,
                       (sum, item) => sum + estimateTokenCount(item.content)) +
+                  project.invariants.fold<int>(
+                      0,
+                      (sum, invariant) =>
+                          sum +
+                          estimateTokenCount(invariant.name) +
+                          estimateTokenCount(invariant.description)) +
                   chat.contextMessages.fold<int>(
                     0,
                     (sum, message) =>

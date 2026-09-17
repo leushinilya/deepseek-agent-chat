@@ -176,6 +176,31 @@ class ChatBranch {
       );
 }
 
+class ProjectInvariant {
+  const ProjectInvariant({
+    required this.id,
+    required this.name,
+    required this.description,
+  });
+
+  final String id;
+  final String name;
+  final String description;
+
+  Map<String, Object> toJson() => {
+        'id': id,
+        'name': name,
+        'description': description,
+      };
+
+  factory ProjectInvariant.fromJson(Map<String, dynamic> json) =>
+      ProjectInvariant(
+        id: json['id'] as String,
+        name: json['name'] as String,
+        description: json['description'] as String,
+      );
+}
+
 class AgentProject {
   const AgentProject({
     required this.id,
@@ -183,6 +208,7 @@ class AgentProject {
     required this.createdAt,
     required this.updatedAt,
     this.stateModelId,
+    this.invariants = const [],
   });
 
   final String id;
@@ -190,11 +216,13 @@ class AgentProject {
   final DateTime createdAt;
   final DateTime updatedAt;
   final String? stateModelId;
+  final List<ProjectInvariant> invariants;
 
   AgentProject copyWith({
     String? title,
     DateTime? updatedAt,
     String? stateModelId,
+    List<ProjectInvariant>? invariants,
   }) =>
       AgentProject(
         id: id,
@@ -202,12 +230,14 @@ class AgentProject {
         createdAt: createdAt,
         updatedAt: updatedAt ?? this.updatedAt,
         stateModelId: stateModelId ?? this.stateModelId,
+        invariants: invariants ?? this.invariants,
       );
 
   Map<String, Object> toJson() => {
         'id': id,
         'title': title,
         if (stateModelId != null) 'stateModelId': stateModelId!,
+        'invariants': invariants.map((item) => item.toJson()).toList(),
         'createdAt': createdAt.toIso8601String(),
         'updatedAt': updatedAt.toIso8601String(),
       };
@@ -216,6 +246,10 @@ class AgentProject {
         id: json['id'] as String,
         title: json['title'] as String,
         stateModelId: json['stateModelId'] as String?,
+        invariants: (json['invariants'] as List<dynamic>? ?? const [])
+            .map((item) =>
+                ProjectInvariant.fromJson(item as Map<String, dynamic>))
+            .toList(growable: false),
         createdAt: DateTime.parse(json['createdAt'] as String),
         updatedAt: DateTime.parse(json['updatedAt'] as String),
       );

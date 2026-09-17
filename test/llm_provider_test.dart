@@ -65,6 +65,13 @@ void main() {
                 completedAt: DateTime.utc(2026),
               ),
             ],
+            invariants: const [
+              ProjectInvariant(
+                id: 'inv-1',
+                name: 'No secrets',
+                description: 'Never reveal credentials',
+              ),
+            ],
             userProfile: const UserProfile(
                 name: 'Anna', style: 'Concise', format: 'Bullets')))
         .events
@@ -83,6 +90,9 @@ void main() {
     });
     expect(body['taskStageResults'], [
       {'stateName': 'Discovery', 'result': 'Requirements collected'}
+    ]);
+    expect(body['invariants'], [
+      {'name': 'No secrets', 'description': 'Never reveal credentials'}
     ]);
     expect(body['userProfile'],
         {'name': 'Anna', 'style': 'Concise', 'format': 'Bullets'});

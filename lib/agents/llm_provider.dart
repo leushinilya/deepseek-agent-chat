@@ -17,6 +17,7 @@ class LlmRequest {
     this.userProfile = const UserProfile(),
     this.taskState,
     this.taskStageResults = const [],
+    this.invariants = const [],
   });
   final AiAgent agent;
   final List<ChatMessage> messages;
@@ -27,6 +28,7 @@ class LlmRequest {
   final UserProfile userProfile;
   final TaskStateDefinition? taskState;
   final List<TaskStageResult> taskStageResults;
+  final List<ProjectInvariant> invariants;
 }
 
 sealed class LlmEvent {
@@ -114,6 +116,13 @@ class BackendLlmProvider implements LlmProvider {
                       .map((result) => {
                             'stateName': result.stateName,
                             'result': result.result,
+                          })
+                      .toList(),
+                if (request.invariants.isNotEmpty)
+                  'invariants': request.invariants
+                      .map((item) => {
+                            'name': item.name,
+                            'description': item.description,
                           })
                       .toList(),
               });

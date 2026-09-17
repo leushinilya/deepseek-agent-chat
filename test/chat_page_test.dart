@@ -138,6 +138,9 @@ void main() {
     repository.updateWorkingMemory(chat.taskId, 'Не использовать Firebase');
     repository.rememberLongTerm(
         project.id, 'Пользователь предпочитает Flutter');
+    repository.addProjectInvariant(project.id,
+        name: 'Не раскрывать секреты',
+        description: 'Нельзя выводить пароли и ключи доступа.');
     await tester.pumpWidget(MaterialApp(
       home:
           ChatPage(repository: repository, chatId: chat.id, provider: provider),
@@ -152,6 +155,8 @@ void main() {
     expect(provider.requests.single.workingMemory, 'Не использовать Firebase');
     expect(provider.requests.single.longTermMemory,
         ['Пользователь предпочитает Flutter']);
+    expect(provider.requests.single.invariants.single.name,
+        'Не раскрывать секреты');
   });
 
   testWidgets('compression settings validate and summary precedes answer',

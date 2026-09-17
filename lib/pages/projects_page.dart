@@ -99,6 +99,12 @@ class ProjectsPage extends StatelessWidget {
             icon: const Icon(Icons.psychology_alt_outlined),
           ),
           IconButton(
+            key: Key('addInvariant-${project.id}'),
+            tooltip: 'Добавить инвариант',
+            onPressed: () => _addInvariant(context, project),
+            icon: const Icon(Icons.gpp_maybe_outlined),
+          ),
+          IconButton(
             key: Key('deleteProject-${project.id}'),
             tooltip: 'Удалить проект',
             onPressed: () => _delete(context, project),
@@ -129,6 +135,48 @@ class ProjectsPage extends StatelessWidget {
                 },
         ),
         const SizedBox(height: 12),
+        Row(children: [
+          const Icon(Icons.gpp_maybe_outlined,
+              size: 18, color: Color(0xFFD92D20)),
+          const SizedBox(width: 8),
+          Text('Инварианты', style: Theme.of(context).textTheme.titleSmall),
+        ]),
+        const SizedBox(height: 6),
+        if (project.invariants.isEmpty)
+          const Text('Запреты для агента не заданы.',
+              style: TextStyle(
+                  color: Color(0xFF667085), fontStyle: FontStyle.italic))
+        else
+          ...project.invariants.map((invariant) => Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(invariant.name,
+                                  style: const TextStyle(
+                                      fontWeight: FontWeight.w700)),
+                              Text(invariant.description,
+                                  style: const TextStyle(
+                                      color: Color(0xFF475467))),
+                            ]),
+                      ),
+                      IconButton(
+                        key: Key('deleteInvariant-${invariant.id}'),
+                        tooltip: 'Удалить инвариант',
+                        onPressed: () => repository.deleteProjectInvariant(
+                            project.id, invariant.id),
+                        icon: const Icon(Icons.delete_outline_rounded),
+                      ),
+                    ]),
+              )),
+        const SizedBox(height: 12),
+        Text('Долговременная память',
+            style: Theme.of(context).textTheme.titleSmall),
+        const SizedBox(height: 6),
         if (items.isEmpty)
           const Text('Долговременная память проекта пуста.',
               style: TextStyle(
@@ -177,6 +225,20 @@ class ProjectsPage extends StatelessWidget {
     if (value != null) repository.rememberLongTerm(project.id, value);
   }
 
+  Future<void> _addInvariant(BuildContext context, AgentProject project) async {
+    final draft = await showDialog<_InvariantDraft>(
+      context: context,
+      builder: (context) => _InvariantDialog(projectTitle: project.title),
+    );
+    if (draft != null) {
+      repository.addProjectInvariant(
+        project.id,
+        name: draft.name,
+        description: draft.description,
+      );
+    }
+  }
+
   Future<void> _delete(BuildContext context, AgentProject project) async {
     final count = repository.taskCountForProject(project.id);
     if (count > 0) {
@@ -197,6 +259,77 @@ class ProjectsPage extends StatelessWidget {
     }
     repository.deleteProject(project.id);
   }
+}
+
+class _InvariantDraft {
+  const _InvariantDraft(this.name, this.description);
+  final String name;
+  final String description;
+}
+
+class _InvariantDialog extends StatefulWidget {
+  const _InvariantDialog({required this.projectTitle});
+  final String projectTitle;
+
+  @override
+  State<_InvariantDialog> createState() => _InvariantDialogState();
+}
+
+class _InvariantDialogState extends State<_InvariantDialog> {
+  final _name = TextEditingController();
+  final _description = TextEditingController();
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _description.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+        title: Text('Инвариант · ${widget.projectTitle}'),
+        content: SizedBox(
+          width: 520,
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            TextField(
+              key: const Key('invariantNameField'),
+              controller: _name,
+              autofocus: true,
+              maxLength: 200,
+              decoration: const InputDecoration(labelText: 'Название'),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              key: const Key('invariantDescriptionField'),
+              controller: _description,
+              minLines: 3,
+              maxLines: 6,
+              maxLength: 4000,
+              decoration: const InputDecoration(
+                labelText: 'Описание запрета',
+                helperText: 'Что агент не имеет права делать или нарушать.',
+              ),
+            ),
+          ]),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Отмена')),
+          FilledButton(
+            key: const Key('saveInvariantButton'),
+            onPressed: () {
+              final name = _name.text.trim();
+              final description = _description.text.trim();
+              if (name.isNotEmpty && description.isNotEmpty) {
+                Navigator.pop(context, _InvariantDraft(name, description));
+              }
+            },
+            child: const Text('Добавить'),
+          ),
+        ],
+      );
 }
 
 class _ProjectTextDialog extends StatefulWidget {

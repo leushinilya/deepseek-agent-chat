@@ -35,7 +35,7 @@ class AgentChatRepository extends ChangeNotifier {
       : memory = MemoryRepository(_store, clock: _clock);
 
   static const _storageKey = 'ai_agents_and_chats_v1';
-  static const _schemaVersion = 8;
+  static const _schemaVersion = 9;
 
   final KeyValueStore _store;
   final DateTime Function() _clock;
@@ -241,6 +241,45 @@ class AgentChatRepository extends ChangeNotifier {
     _projects.add(project);
     _changed();
     return project;
+  }
+
+  ProjectInvariant addProjectInvariant(
+    String projectId, {
+    required String name,
+    required String description,
+  }) {
+    final index = _projects.indexWhere((project) => project.id == projectId);
+    if (index < 0) throw StateError('Project not found');
+    final invariant = ProjectInvariant(
+      id: _id('invariant'),
+      name: _required(name, 'Введите название инварианта.'),
+      description: _required(description, 'Введите описание инварианта.'),
+    );
+    if (invariant.name.length > 200) {
+      throw ArgumentError('Название не должно превышать 200 символов.');
+    }
+    if (invariant.description.length > 4000) {
+      throw ArgumentError('Описание не должно превышать 4000 символов.');
+    }
+    _projects[index] = _projects[index].copyWith(
+      invariants: [..._projects[index].invariants, invariant],
+      updatedAt: _clock(),
+    );
+    _changed();
+    return invariant;
+  }
+
+  void deleteProjectInvariant(String projectId, String invariantId) {
+    final index = _projects.indexWhere((project) => project.id == projectId);
+    if (index < 0) throw StateError('Project not found');
+    final project = _projects[index];
+    _projects[index] = project.copyWith(
+      invariants: project.invariants
+          .where((item) => item.id != invariantId)
+          .toList(growable: false),
+      updatedAt: _clock(),
+    );
+    _changed();
   }
 
   TaskStateModel createStateModel({required String title}) {

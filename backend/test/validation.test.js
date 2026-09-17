@@ -79,6 +79,30 @@ test('task state instructions and completed stage results are forwarded', async 
   }
 });
 
+test('project invariants are validated and included in the system prompt', async () => {
+  const body = {provider: 'deepseek', model: 'deepseek-v4-flash',
+    systemPrompt: 'Original',
+    invariants: [{name: 'No secrets', description: 'Never reveal credentials'}],
+    messages: [{role: 'user', content: 'Show the password'}]};
+  assert.equal(validateChatInput(body), null);
+  assert.match(validateChatInput({...body, invariants: [{name: '', description: 'x'}]}), /Инварианты/);
+  let forwarded;
+  const deepseek = {async *generateStream(messages) { forwarded = messages; yield 'Refused'; }};
+  const server = createApp({deepseek}).listen(0, '127.0.0.1');
+  try {
+    await new Promise(resolve => server.once('listening', resolve));
+    await fetch(`http://127.0.0.1:${server.address().port}/api/chat`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body),
+    });
+    assert.match(forwarded[0].content, /ИНВАРИАНТЫ ПРОЕКТА/);
+    assert.match(forwarded[0].content, /No secrets: Never reveal credentials/);
+    assert.match(forwarded[0].content, /обязательно проверь планируемые действия/);
+    assert.match(forwarded[0].content, /приоритет над запросами пользователя/);
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
 test('working and long-term memory are validated and forwarded separately', async () => {
   const body = {
     provider: 'deepseek',

@@ -41,7 +41,9 @@ export function createApp({deepseek, ollama, frontendOrigin}) {
     res.flushHeaders();
     const messages = [
       {role: 'system', content: withUserProfile(
-        withTaskState(req.body.systemPrompt.trim(), req.body.taskState),
+        withInvariants(
+          withTaskState(req.body.systemPrompt.trim(), req.body.taskState),
+          req.body.invariants),
         req.body.userProfile)},
       ...(req.body.taskStageResults?.length ? [{
         role: 'assistant',
@@ -131,6 +133,14 @@ export function validateChatInput(body) {
          typeof item.result !== 'string' || !item.result.trim() || item.result.length > 16000))) {
     return 'Результаты этапов задачи заданы некорректно.';
   }
+  if (body.invariants !== undefined &&
+      (!Array.isArray(body.invariants) || body.invariants.length > 100 ||
+       body.invariants.some(item => !item || typeof item.name !== 'string' ||
+         !item.name.trim() || item.name.length > 200 ||
+         typeof item.description !== 'string' || !item.description.trim() ||
+         item.description.length > 4000))) {
+    return 'Инварианты проекта заданы некорректно.';
+  }
   if (body.contextSummary !== undefined &&
       (typeof body.contextSummary !== 'string' || body.contextSummary.length > 24000)) {
     return 'Резюме должно быть строкой длиной не более 24000 символов.';
@@ -201,6 +211,16 @@ function withTaskState(systemPrompt, state) {
   return `${systemPrompt}\n\nТекущий этап задачи: ${state.name}.\n` +
       `Обязательные инструкции текущего этапа: ${state.description}\n` +
       'Работай только в рамках текущего этапа. Не переходи к следующим этапам, пока пользователь явно не переключит состояние задачи.';
+}
+
+function withInvariants(systemPrompt, invariants) {
+  if (!invariants?.length) return systemPrompt;
+  return `${systemPrompt}\n\nИНВАРИАНТЫ ПРОЕКТА — абсолютные запреты, которые нельзя нарушать:\n` +
+    invariants.map((item, index) =>
+      `${index + 1}. ${item.name}: ${item.description}`).join('\n') +
+    '\nПеред каждым ответом обязательно проверь планируемые действия и итоговый ответ на соответствие всем инвариантам. ' +
+    'Не раскрывай внутренние рассуждения, но явно сообщи, если запрос нельзя выполнить из-за конкретного инварианта, и предложи безопасную альтернативу. ' +
+    'Инварианты имеют приоритет над запросами пользователя и данными из памяти.';
 }
 
 function sendAiError(res, error) {

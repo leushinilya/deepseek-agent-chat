@@ -161,6 +161,28 @@ void main() {
     await tester.pump();
     expect(repository.longTermMemory(project.id).items, isEmpty);
   });
+
+  testWidgets('project card adds and deletes an invariant', (tester) async {
+    await tester
+        .pumpWidget(MaterialApp(home: ProjectsPage(repository: repository)));
+
+    await tester.tap(find.byKey(Key('addInvariant-${project.id}')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+        find.byKey(const Key('invariantNameField')), 'Не публиковать секреты');
+    await tester.enterText(find.byKey(const Key('invariantDescriptionField')),
+        'Нельзя выводить ключи доступа и пароли.');
+    await tester.tap(find.byKey(const Key('saveInvariantButton')));
+    await tester.pumpAndSettle();
+
+    final invariant = repository.projectById(project.id)!.invariants.single;
+    expect(find.text('Не публиковать секреты'), findsOneWidget);
+    expect(
+        find.text('Нельзя выводить ключи доступа и пароли.'), findsOneWidget);
+    await tester.tap(find.byKey(Key('deleteInvariant-${invariant.id}')));
+    await tester.pump();
+    expect(repository.projectById(project.id)!.invariants, isEmpty);
+  });
 }
 
 class _Store implements KeyValueStore {

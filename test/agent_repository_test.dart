@@ -111,6 +111,31 @@ void main() {
     expect(task.currentStateId, isNull);
   });
 
+  test('project invariants are validated, persisted and deleted', () async {
+    final project = repository.createProject(title: 'Safe project');
+    final invariant = repository.addProjectInvariant(
+      project.id,
+      name: 'Не удалять данные',
+      description: 'Агент не должен удалять пользовательские данные.',
+    );
+    expect(repository.projectById(project.id)!.invariants.single.name,
+        'Не удалять данные');
+    expect(
+      () => repository.addProjectInvariant(project.id,
+          name: ' ', description: 'Описание'),
+      throwsArgumentError,
+    );
+    await repository.settled;
+
+    final restored = AgentChatRepository(store);
+    await restored.load();
+    expect(restored.projectById(project.id)!.invariants.single.description,
+        'Агент не должен удалять пользовательские данные.');
+
+    restored.deleteProjectInvariant(project.id, invariant.id);
+    expect(restored.projectById(project.id)!.invariants, isEmpty);
+  });
+
   test('does not delete an agent with linked chats', () {
     final agent = repository.createAgent(
       name: 'Agent',
