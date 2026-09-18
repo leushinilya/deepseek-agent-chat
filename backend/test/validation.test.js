@@ -56,11 +56,16 @@ test('facts are validated and forwarded before recent messages', async () => {
 test('task state instructions and completed stage results are forwarded', async () => {
   const body = {provider: 'deepseek', model: 'deepseek-v4-flash',
     systemPrompt: 'Original',
-    taskState: {name: 'Planning', description: 'Create a plan; do not implement'},
+    taskState: {id: 'planning', name: 'Planning', description: 'Create a plan; do not implement',
+      modelName: 'Delivery', states: [
+        {id: 'planning', name: 'Planning', description: 'Create a plan; do not implement'},
+        {id: 'implementation', name: 'Implementation', description: 'Write the code'},
+      ]},
     taskStageResults: [{stateName: 'Discovery', result: 'Requirements collected'}],
     messages: [{role: 'user', content: 'Continue'}]};
   assert.equal(validateChatInput(body), null);
-  assert.match(validateChatInput({...body, taskState: {name: '', description: 'x'}}), /состояние/);
+  assert.match(validateChatInput({...body, taskState: {id: 'x', name: '', description: 'x'}}), /состояние/);
+  assert.match(validateChatInput({...body, taskState: {...body.taskState, id: 'missing'}}), /состояние/);
   assert.match(validateChatInput({...body, taskStageResults: [{stateName: 'x', result: ''}]}), /этапов/);
   let forwarded;
   const deepseek = {async *generateStream(messages) { forwarded = messages; yield 'Answer'; }};
@@ -71,7 +76,11 @@ test('task state instructions and completed stage results are forwarded', async 
       method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body),
     });
     assert.match(forwarded[0].content, /Create a plan; do not implement/);
-    assert.match(forwarded[0].content, /не переходи к следующим этапам/i);
+    assert.match(forwarded[0].content, /исключительно при нажатии пользователем кнопки перехода/i);
+    assert.match(forwarded[0].content, /явный запрос пользователя.*не дают права на переход/i);
+    assert.match(forwarded[0].content, /переход разрешён по явному запросу пользователя.*устарело и ложно/i);
+    assert.match(forwarded[0].content, /не выполняй полностью или частично задания из будущих/i);
+    assert.match(forwarded[0].content, /Implementation: Write the code/);
     assert.match(forwarded[1].content, /Requirements collected/);
     assert.equal(forwarded[2].content, 'Continue');
   } finally {

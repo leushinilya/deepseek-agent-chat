@@ -16,6 +16,7 @@ class LlmRequest {
     this.longTermMemory = const [],
     this.userProfile = const UserProfile(),
     this.taskState,
+    this.taskStateModel,
     this.taskStageResults = const [],
     this.invariants = const [],
   });
@@ -27,6 +28,7 @@ class LlmRequest {
   final List<String> longTermMemory;
   final UserProfile userProfile;
   final TaskStateDefinition? taskState;
+  final TaskStateModel? taskStateModel;
   final List<TaskStageResult> taskStageResults;
   final List<ProjectInvariant> invariants;
 }
@@ -108,8 +110,19 @@ class BackendLlmProvider implements LlmProvider {
                   'userProfile': request.userProfile.toJson(),
                 if (request.taskState != null)
                   'taskState': {
+                    'id': request.taskState!.id,
                     'name': request.taskState!.name,
                     'description': request.taskState!.description,
+                    if (request.taskStateModel != null) ...{
+                      'modelName': request.taskStateModel!.title,
+                      'states': request.taskStateModel!.states
+                          .map((state) => {
+                                'id': state.id,
+                                'name': state.name,
+                                'description': state.description,
+                              })
+                          .toList(),
+                    },
                   },
                 if (request.taskStageResults.isNotEmpty)
                   'taskStageResults': request.taskStageResults

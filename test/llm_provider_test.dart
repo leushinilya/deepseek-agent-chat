@@ -57,6 +57,24 @@ void main() {
               description: 'Create an implementation plan only',
               colorValue: 0xFF3659D9,
             ),
+            taskStateModel: TaskStateModel(
+              id: 'workflow',
+              title: 'Delivery',
+              states: const [
+                TaskStateDefinition(
+                    id: 'planning',
+                    name: 'Planning',
+                    description: 'Create an implementation plan only',
+                    colorValue: 0),
+                TaskStateDefinition(
+                    id: 'implementation',
+                    name: 'Implementation',
+                    description: 'Write the code',
+                    colorValue: 0),
+              ],
+              createdAt: DateTime.utc(2026),
+              updatedAt: DateTime.utc(2026),
+            ),
             taskStageResults: [
               TaskStageResult(
                 stateId: 'discovery',
@@ -85,8 +103,22 @@ void main() {
     expect(body['workingMemory'], 'Finish login screen');
     expect(body['longTermMemory'], ['Prefers Flutter']);
     expect(body['taskState'], {
+      'id': 'planning',
       'name': 'Planning',
-      'description': 'Create an implementation plan only'
+      'description': 'Create an implementation plan only',
+      'modelName': 'Delivery',
+      'states': [
+        {
+          'id': 'planning',
+          'name': 'Planning',
+          'description': 'Create an implementation plan only'
+        },
+        {
+          'id': 'implementation',
+          'name': 'Implementation',
+          'description': 'Write the code'
+        },
+      ],
     });
     expect(body['taskStageResults'], [
       {'stateName': 'Discovery', 'result': 'Requirements collected'}

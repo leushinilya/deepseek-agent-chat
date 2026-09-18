@@ -168,6 +168,7 @@ class _ChatPageState extends State<ChatPage> {
           longTermMemory: longTerm.items.map((item) => item.content).toList(),
           userProfile: widget.repository.userProfile,
           taskState: widget.repository.currentStateForTask(task),
+          taskStateModel: widget.repository.stateModelForTask(task),
           taskStageResults: task.stageResults,
           invariants: project.invariants),
     );
