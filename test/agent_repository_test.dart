@@ -31,6 +31,21 @@ void main() {
     }
   });
 
+  test('MCP servers belong to an agent and survive reload', () async {
+    final agent = repository.createAgent(
+        name: 'Editor',
+        systemPrompt: 'Edit files',
+        model: AgentModel.deepseekFlash);
+    repository.updateAgent(agent.copyWith(mcpServers: const [
+      McpServer(id: 'filesystem-1', directories: ['/tmp/project']),
+    ]));
+    await repository.settled;
+    final restored = AgentChatRepository(store);
+    await restored.load();
+    expect(restored.agentById(agent.id)!.mcpServers.single.directories,
+        ['/tmp/project']);
+  });
+
   test('creates chat, names it from first message and restores history',
       () async {
     final agent = repository.createAgent(

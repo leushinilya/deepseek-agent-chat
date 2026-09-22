@@ -51,6 +51,7 @@ class AiAgent {
     required this.model,
     required this.createdAt,
     required this.updatedAt,
+    this.mcpServers = const [],
   });
 
   final String id;
@@ -59,12 +60,14 @@ class AiAgent {
   final AgentModel model;
   final DateTime createdAt;
   final DateTime updatedAt;
+  final List<McpServer> mcpServers;
 
   AiAgent copyWith({
     String? name,
     String? systemPrompt,
     AgentModel? model,
     DateTime? updatedAt,
+    List<McpServer>? mcpServers,
   }) =>
       AiAgent(
         id: id,
@@ -73,6 +76,7 @@ class AiAgent {
         model: model ?? this.model,
         createdAt: createdAt,
         updatedAt: updatedAt ?? this.updatedAt,
+        mcpServers: mcpServers ?? this.mcpServers,
       );
 
   Map<String, Object> toJson() => {
@@ -82,6 +86,7 @@ class AiAgent {
         'model': model.id,
         'createdAt': createdAt.toIso8601String(),
         'updatedAt': updatedAt.toIso8601String(),
+        'mcpServers': mcpServers.map((server) => server.toJson()).toList(),
       };
 
   factory AiAgent.fromJson(Map<String, dynamic> json) => AiAgent(
@@ -91,7 +96,31 @@ class AiAgent {
         model: AgentModel.fromId(json['model'] as String),
         createdAt: DateTime.parse(json['createdAt'] as String),
         updatedAt: DateTime.parse(json['updatedAt'] as String),
+        mcpServers: (json['mcpServers'] as List<dynamic>? ?? const [])
+            .map((value) => McpServer.fromJson(value as Map<String, dynamic>))
+            .toList(growable: false),
       );
+}
+
+class McpServer {
+  const McpServer({required this.id, required this.directories});
+
+  final String id;
+  final List<String> directories;
+  String get name => 'Filesystem';
+
+  Map<String, Object> toJson() =>
+      {'id': id, 'type': 'filesystem', 'directories': directories};
+
+  factory McpServer.fromJson(Map<String, dynamic> json) {
+    if (json['type'] != 'filesystem') {
+      throw const FormatException('Unknown MCP server');
+    }
+    return McpServer(
+      id: json['id'] as String,
+      directories: (json['directories'] as List<dynamic>).cast<String>(),
+    );
+  }
 }
 
 enum ChatRole { user, assistant }

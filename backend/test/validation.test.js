@@ -5,6 +5,71 @@ import {createApp, validateChatInput, validateComparisonInput} from '../src/app.
 import {calculateDeepSeekCost, createDeepSeekClient, isDeepSeekPeak} from '../src/deepseek.js';
 import {createOllamaClient} from '../src/ollama.js';
 
+test('MCP check returns the tools/list response and closes the connection', async () => {
+  const listing = {tools: [{name: 'edit_file', description: 'Edit a file',
+    inputSchema: {type: 'object'}}]};
+  let closed = false;
+  const openMcp = async directories => {
+    assert.deepEqual(directories, ['/tmp/project']);
+    return {listTools: async () => listing, close: () => { closed = true; }};
+  };
+  const server = createApp({openMcp}).listen(0, '127.0.0.1');
+  try {
+    await new Promise(resolve => server.once('listening', resolve));
+    const url = `http://127.0.0.1:${server.address().port}/api/mcp/tools`;
+    const response = await fetch(url, {method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({type: 'filesystem', directories: ['/tmp/project']})});
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), listing);
+    assert.equal(closed, true);
+    const invalid = await fetch(url, {method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({type: 'filesystem', directories: ['relative']})});
+    assert.equal(invalid.status, 400);
+  } finally { await new Promise(resolve => server.close(resolve)); }
+});
+
+test('MCP tools are exposed only for the configured agent and results return to the model', async () => {
+  const body = {provider: 'deepseek', model: 'deepseek-v4-flash',
+    systemPrompt: 'Edit files', messages: [{role: 'user', content: 'Read the file'}],
+    mcpServers: [{id: 'one', type: 'filesystem', directories: ['/tmp/project']}]};
+  assert.equal(validateChatInput(body), null);
+  assert.match(validateChatInput({...body, mcpServers: [{type: 'filesystem', directories: ['relative']}]}), /MCP/);
+  let calls = 0;
+  let receivedToolResult;
+  let closed = false;
+  const deepseek = {async completeWithTools(messages, {tools}) {
+    calls++;
+    assert.equal(tools[0].function.name, 'filesystem_0_read_text_file');
+    if (calls === 1) return {message: {role: 'assistant', content: null,
+      tool_calls: [{id: 'call-1', type: 'function', function: {
+        name: 'filesystem_0_read_text_file', arguments: '{"path":"/tmp/project/a.txt"}'}}]}};
+    receivedToolResult = messages.at(-1);
+    return {message: {role: 'assistant', content: 'File read'}};
+  }};
+  const openMcp = async directories => {
+    assert.deepEqual(directories, ['/tmp/project']);
+    return {listTools: async () => ({tools: [{name: 'read_text_file', inputSchema: {type: 'object'}}]}),
+      callTool: async (name, args) => {
+        assert.equal(name, 'read_text_file');
+        assert.equal(args.path, '/tmp/project/a.txt');
+        return {content: [{type: 'text', text: 'Hello'}]};
+      }, close: () => { closed = true; }};
+  };
+  const server = createApp({deepseek, openMcp}).listen(0, '127.0.0.1');
+  try {
+    await new Promise(resolve => server.once('listening', resolve));
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/api/chat`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+    assert.equal(response.status, 200);
+    assert.match(await response.text(), /File read/);
+    assert.equal(receivedToolResult.role, 'tool');
+    assert.match(receivedToolResult.content, /Hello/);
+    assert.equal(closed, true);
+  } finally { await new Promise(resolve => server.close(resolve)); }
+});
+
 test('summary is validated and forwarded between system prompt and recent messages', async () => {
   const body = {provider: 'deepseek', model: 'deepseek-v4-flash',
     systemPrompt: 'Original instructions', contextSummary: 'Prior facts',

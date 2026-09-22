@@ -36,6 +36,25 @@ export function calculateDeepSeekCost(model, usage, date = new Date()) {
 
 export function createDeepSeekClient({apiKey, apiUrl, fetchImpl = fetch}) {
   return {
+    async completeWithTools(messages, {model, tools, signal}) {
+      ensureApiKey(apiKey);
+      let response;
+      try {
+        response = await fetchImpl(apiUrl, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}`},
+          body: JSON.stringify({model, messages, tools, stream: false}),
+          signal: signal ?? AbortSignal.timeout(180000),
+        });
+      } catch {
+        throw new UpstreamError('Не удалось подключиться к DeepSeek API.', 502, 'network_error');
+      }
+      if (!response.ok) throw deepSeekStatusError(response.status);
+      const payload = await response.json();
+      const message = payload?.choices?.[0]?.message;
+      if (!message) throw new UpstreamError('DeepSeek вернул некорректный ответ.');
+      return {message, usage: payload.usage};
+    },
     async generate(messages, {model, temperature = 0.7} = {}) {
       ensureApiKey(apiKey);
       const startedAt = Date.now();

@@ -3,14 +3,45 @@ import express from 'express';
 
 import {UpstreamError} from './deepseek.js';
 import {baseSystemPrompt} from './prompts.js';
+import {browseMcpDirectories, openFilesystemServer} from './mcp.js';
 
 export const limits = Object.freeze({maxQueryLength: 8000});
 const supportedModels = new Set(['local-gigachat', 'deepseek-v4-flash', 'deepseek-v4-pro']);
 
-export function createApp({deepseek, ollama, frontendOrigin}) {
+export function createApp({deepseek, ollama, frontendOrigin, openMcp = openFilesystemServer}) {
   const app = express();
-  if (frontendOrigin) app.use(cors({origin: frontendOrigin, methods: ['POST']}));
+  if (frontendOrigin) app.use(cors({origin: frontendOrigin, methods: ['GET', 'POST']}));
   app.use(express.json({limit: '100kb'}));
+
+  app.get('/api/mcp/directories', async (req, res) => {
+    try {
+      const path = req.query.path;
+      if (path !== undefined && (typeof path !== 'string' || path.length > 1000)) {
+        return res.status(400).json({error: 'Некорректный путь к каталогу.'});
+      }
+      return res.json(await browseMcpDirectories(path));
+    } catch (error) {
+      const status = error?.message?.includes('MCP_ALLOWED_ROOTS') ? 503 : 400;
+      return res.status(status).json({error: status === 503 ||
+        error?.message?.startsWith('Каталог не найден:')
+        ? error.message : 'Не удалось открыть каталог в разрешённой области MCP.'});
+    }
+  });
+
+  app.post('/api/mcp/tools', async (req, res) => {
+    if (!isValidMcpServer(req.body)) {
+      return res.status(400).json({error: 'Настройки MCP-сервера заданы некорректно.'});
+    }
+    let connection;
+    try {
+      connection = await openMcp(req.body.directories);
+      return res.json(await connection.listTools());
+    } catch (error) {
+      return res.status(502).json({error: `Не удалось получить список инструментов MCP: ${error.message}`});
+    } finally {
+      connection?.close();
+    }
+  });
 
   app.post('/api/compare', async (req, res) => {
     const validationError = validateComparisonInput(req.body);
@@ -68,6 +99,13 @@ export function createApp({deepseek, ollama, frontendOrigin}) {
       ...req.body.messages.map(({role, content}) => ({role, content: content.trim()})),
     ];
     try {
+      if (req.body.mcpServers?.length) {
+        const result = await chatWithMcp(req.body, messages,
+          req.body.provider === 'ollama' ? ollama : deepseek, openMcp, controller.signal);
+        res.write(`${JSON.stringify({type: 'delta', text: result.answer})}\n`);
+        res.write(`${JSON.stringify({type: 'done', ...result.usage})}\n`);
+        return res.end();
+      }
       const stream = req.body.provider === 'ollama'
         ? ollama.generateStream(messages, {signal: controller.signal})
         : deepseek.generateStream(messages, {model: req.body.model, signal: controller.signal});
@@ -116,6 +154,11 @@ export function validateComparisonInput(body) {
 
 export function validateChatInput(body) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return 'Тело запроса должно быть JSON-объектом.';
+  if (body.mcpServers !== undefined &&
+      (!Array.isArray(body.mcpServers) || body.mcpServers.length > 5 ||
+       body.mcpServers.some(server => !isValidMcpServer(server)))) {
+    return 'Настройки MCP-серверов заданы некорректно.';
+  }
   const profileError = validateUserProfile(body.userProfile);
   if (profileError) return profileError;
   if (body.taskState !== undefined) {
@@ -195,6 +238,72 @@ export function validateChatInput(body) {
     if (message.content.length > 16000) return 'Сообщение не должно превышать 16000 символов.';
   }
   return null;
+}
+
+function isValidMcpServer(server) {
+  return server && typeof server === 'object' && !Array.isArray(server) &&
+    server.type === 'filesystem' && Array.isArray(server.directories) &&
+    server.directories.length >= 1 && server.directories.length <= 10 &&
+    server.directories.every(path => typeof path === 'string' &&
+      path.startsWith('/') && path.length <= 1000);
+}
+
+async function chatWithMcp(body, messages, provider, openMcp, signal) {
+  const connections = [];
+  try {
+    const tools = [];
+    const toolMap = new Map();
+    for (const [index, config] of body.mcpServers.entries()) {
+      let connection;
+      try {
+        connection = await openMcp(config.directories);
+      } catch (error) {
+        throw new UpstreamError(`Не удалось запустить MCP: ${error.message}`, 400, 'mcp_error');
+      }
+      connections.push(connection);
+      const listed = await connection.listTools();
+      for (const tool of listed.tools ?? []) {
+        const name = `filesystem_${index}_${tool.name}`;
+        tools.push({type: 'function', function: {
+          name, description: tool.description ?? '',
+          parameters: tool.inputSchema ?? {type: 'object', properties: {}},
+        }});
+        toolMap.set(name, {connection, name: tool.name});
+      }
+    }
+    let promptTokens = 0;
+    let completionTokens = 0;
+    for (let turn = 0; turn < 8; turn++) {
+      if (signal.aborted) throw new Error('Запрос отменён.');
+      const result = await provider.completeWithTools(messages,
+        {model: body.model, tools, signal});
+      promptTokens += result.usage?.prompt_tokens ?? 0;
+      completionTokens += result.usage?.completion_tokens ?? 0;
+      const calls = result.message.tool_calls ?? [];
+      if (!calls.length) {
+        const answer = result.message.content;
+        if (typeof answer !== 'string' || !answer.trim()) {
+          throw new Error('Модель вернула пустой ответ после вызова MCP.');
+        }
+        return {answer, usage: {promptTokens, completionTokens}};
+      }
+      messages.push(result.message);
+      for (const call of calls) {
+        const target = toolMap.get(call.function?.name);
+        if (!target) throw new Error('Модель вызвала неизвестный MCP-инструмент.');
+        const args = typeof call.function.arguments === 'string'
+          ? JSON.parse(call.function.arguments) : call.function.arguments ?? {};
+        const output = await target.connection.callTool(target.name, args);
+        const content = JSON.stringify(output).slice(0, 50000);
+        messages.push(body.provider === 'ollama'
+          ? {role: 'tool', tool_name: call.function.name, content}
+          : {role: 'tool', tool_call_id: call.id, content});
+      }
+    }
+    throw new Error('Превышено число последовательных вызовов MCP.');
+  } finally {
+    for (const connection of connections) connection.close();
+  }
 }
 
 function validateUserProfile(profile) {

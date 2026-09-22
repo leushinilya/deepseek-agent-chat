@@ -2,6 +2,23 @@ import {UpstreamError} from './deepseek.js';
 
 export function createOllamaClient({apiUrl, model, fetchImpl = fetch}) {
   return {
+    async completeWithTools(messages, {tools, signal}) {
+      let response;
+      try {
+        response = await fetchImpl(apiUrl, {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({model, messages, tools, stream: false}),
+          signal: signal ?? AbortSignal.timeout(180000),
+        });
+      } catch {
+        throw new UpstreamError('Не удалось подключиться к Ollama.', 502, 'ollama_unavailable');
+      }
+      if (!response.ok) throw new UpstreamError('Ollama не смогла вызвать инструменты.', 502);
+      const payload = await response.json();
+      if (!payload?.message) throw new UpstreamError('Ollama вернула некорректный ответ.');
+      return {message: payload.message,
+        usage: {prompt_tokens: payload.prompt_eval_count, completion_tokens: payload.eval_count}};
+    },
     async generate(messages) {
       const startedAt = Date.now();
       let response;

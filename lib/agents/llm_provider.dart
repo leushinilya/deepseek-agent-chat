@@ -93,6 +93,10 @@ class BackendLlmProvider implements LlmProvider {
                 'provider': request.agent.model.providerId,
                 'model': request.agent.model.modelId,
                 'systemPrompt': request.agent.systemPrompt,
+                if (request.agent.mcpServers.isNotEmpty)
+                  'mcpServers': request.agent.mcpServers
+                      .map((server) => server.toJson())
+                      .toList(),
                 'messages': request.messages
                     .map((message) => {
                           'role': message.role.name,
