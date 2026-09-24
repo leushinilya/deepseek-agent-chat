@@ -1,11 +1,13 @@
 import 'dart:convert';
 import 'dart:math';
+import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
 import 'key_value_store.dart';
 import 'memory_models.dart';
 import 'memory_repository.dart';
+import 'llm_provider.dart';
 import 'models.dart';
 import 'token_counter.dart';
 import 'user_profile.dart';
@@ -46,6 +48,9 @@ class AgentChatRepository extends ChangeNotifier {
   final List<TaskStateModel> _stateModels = [];
   final List<AgentTask> _tasks = [];
   final List<AgentChat> _chats = [];
+  final Map<String, Timer> _taskTimers = {};
+  final Set<String> _scheduledTasksRunning = {};
+  final Map<String, LlmOperation> _scheduledOperations = {};
   UserProfile _userProfile = const UserProfile();
   Future<void> _pendingWrite = Future.value();
 
@@ -110,6 +115,15 @@ class AgentChatRepository extends ChangeNotifier {
           ..clear()
           ..addAll((json['chats'] as List<dynamic>? ?? const [])
               .map((item) => AgentChat.fromJson(item as Map<String, dynamic>)));
+        for (var index = 0; index < _chats.length; index++) {
+          final chat = _chats[index];
+          if (chat.isPeriodic) {
+            _chats[index] = chat.copyWith(
+              contextStrategy: ContextStrategy.slidingWindow,
+              windowSize: 1,
+            );
+          }
+        }
         for (var index = 0; index < _tasks.length; index++) {
           final task = _tasks[index];
           if (task.agentId != null) continue;
@@ -453,6 +467,9 @@ class AgentChatRepository extends ChangeNotifier {
 
   void deleteTask(String id) {
     if (taskById(id) == null) throw StateError('Task not found');
+    for (final chat in _chats.where((chat) => chat.taskId == id)) {
+      stopChatSchedule(chat.id);
+    }
     final linkedChatIds = _chats
         .where((chat) => chat.taskId == id)
         .map((chat) => chat.id)
@@ -464,6 +481,110 @@ class AgentChatRepository extends ChangeNotifier {
     _tasks.removeWhere((task) => task.id == id);
     memory.clearTask(id);
     _changed();
+  }
+
+  bool isChatScheduleRunning(String chatId) => _taskTimers.containsKey(chatId);
+  bool isChatScheduleGenerating(String chatId) =>
+      _scheduledTasksRunning.contains(chatId);
+
+  void updateChatSchedule(String chatId,
+      {required String prompt, required int interval, required String unit}) {
+    if (interval < 1 ||
+        !{'seconds', 'minutes', 'hours', 'days'}.contains(unit)) {
+      throw ArgumentError('Некорректный период.');
+    }
+    final index = _chats.indexWhere((item) => item.id == chatId);
+    if (index < 0) throw StateError('Chat not found');
+    _chats[index] = _chats[index].copyWith(
+        schedulePrompt: prompt.trim(),
+        scheduleInterval: interval,
+        scheduleUnit: unit,
+        contextStrategy: prompt.trim().isNotEmpty
+            ? ContextStrategy.slidingWindow
+            : _chats[index].contextStrategy,
+        windowSize: prompt.trim().isNotEmpty ? 1 : _chats[index].windowSize);
+    stopChatSchedule(chatId);
+    _changed();
+  }
+
+  void startChatSchedule(String chatId, LlmProvider provider) {
+    var chat = chatById(chatId);
+    if (chat == null || !chat.isPeriodic) {
+      throw StateError('Заполните запрос расписания.');
+    }
+    final index = _chats.indexWhere((item) => item.id == chatId);
+    _chats[index] = chat.copyWith(
+      contextStrategy: ContextStrategy.slidingWindow,
+      windowSize: 1,
+    );
+    chat = _chats[index];
+    stopChatSchedule(chatId);
+    _taskTimers[chatId] = Timer.periodic(chat.schedulePeriod, (_) {
+      unawaited(_runScheduledChat(chatId, provider));
+    });
+    _changed();
+    unawaited(_runScheduledChat(chatId, provider));
+  }
+
+  void stopChatSchedule(String chatId) {
+    _taskTimers.remove(chatId)?.cancel();
+    _scheduledOperations.remove(chatId)?.cancel();
+    _changed();
+  }
+
+  Future<void> _runScheduledChat(String chatId, LlmProvider provider) async {
+    if (!_taskTimers.containsKey(chatId) ||
+        !_scheduledTasksRunning.add(chatId)) {
+      return;
+    }
+    try {
+      final chat = chatById(chatId);
+      final task = chat == null ? null : taskById(chat.taskId);
+      final agent =
+          chat == null ? null : agentById(task?.agentId ?? chat.agentId);
+      final project = task == null ? null : projectById(task.projectId);
+      if (chat == null || task == null || agent == null || project == null) {
+        return;
+      }
+      appendMessage(chat.id, ChatRole.user, chat.schedulePrompt);
+      final contextChat = chatById(chat.id);
+      if (contextChat == null) return;
+      final operation = provider.send(LlmRequest(
+        agent: agent,
+        messages: contextChat.contextMessages,
+        summary: contextChat.contextStrategy == ContextStrategy.compression
+            ? contextChat.contextSummary
+            : '',
+        facts: contextChat.contextStrategy == ContextStrategy.stickyFacts
+            ? contextChat.facts
+            : const {},
+        workingMemory: workingMemory(task.id).content,
+        longTermMemory: longTermMemory(project.id)
+            .items
+            .map((item) => item.content)
+            .toList(),
+        userProfile: userProfile,
+        taskState: currentStateForTask(task),
+        taskStateModel: stateModelForTask(task),
+        taskStageResults: task.stageResults,
+        invariants: project.invariants,
+      ));
+      _scheduledOperations[chatId] = operation;
+      final answer = StringBuffer();
+      await for (final event in operation.events) {
+        if (event is LlmTextDelta) answer.write(event.text);
+      }
+      if (answer.toString().trim().isNotEmpty &&
+          _taskTimers.containsKey(chatId)) {
+        appendMessage(chat.id, ChatRole.assistant, answer.toString().trim());
+      }
+    } catch (_) {
+      // A failed run leaves its chat available for inspection; the next tick retries.
+    } finally {
+      _scheduledTasksRunning.remove(chatId);
+      _scheduledOperations.remove(chatId);
+      _changed();
+    }
   }
 
   AgentChat createChat({String? agentId, required String taskId}) {
@@ -532,6 +653,7 @@ class AgentChatRepository extends ChangeNotifier {
   }
 
   void deleteChat(String id) {
+    stopChatSchedule(id);
     _chats.removeWhere((chat) => chat.id == id);
     memory.clearChat(id);
     _changed();
@@ -590,6 +712,7 @@ class AgentChatRepository extends ChangeNotifier {
   void updateContextStrategy(String chatId, ContextStrategy strategy) {
     final index = _chats.indexWhere((chat) => chat.id == chatId);
     if (index < 0) throw StateError('Chat not found');
+    if (_chats[index].isPeriodic) return;
     if (_compressingChats.contains(chatId)) {
       throw StateError('Дождитесь завершения обработки контекста.');
     }

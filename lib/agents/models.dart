@@ -410,7 +410,6 @@ class AgentTask {
   final DateTime updatedAt;
   final String? currentStateId;
   final List<TaskStageResult> stageResults;
-
   AgentTask copyWith({
     String? title,
     Object? agentId = _unset,
@@ -478,6 +477,9 @@ class AgentChat {
     this.branches = const [],
     this.activeBranchId,
     this.checkpointMessageCount,
+    this.schedulePrompt = '',
+    this.scheduleInterval = 1,
+    this.scheduleUnit = 'hours',
   });
 
   final String id;
@@ -487,7 +489,8 @@ class AgentChat {
   final List<ChatMessage> messages;
   final DateTime createdAt;
   final DateTime lastActivityAt;
-  bool get compressionEnabled => contextStrategy == ContextStrategy.compression;
+  bool get compressionEnabled =>
+      !isPeriodic && contextStrategy == ContextStrategy.compression;
   final int compressionMax;
   final int compressionMin;
   final String contextSummary;
@@ -499,6 +502,16 @@ class AgentChat {
   final List<ChatBranch> branches;
   final String? activeBranchId;
   final int? checkpointMessageCount;
+  final String schedulePrompt;
+  final int scheduleInterval;
+  final String scheduleUnit;
+  bool get isPeriodic => schedulePrompt.trim().isNotEmpty;
+  Duration get schedulePeriod => switch (scheduleUnit) {
+        'seconds' => Duration(seconds: scheduleInterval),
+        'minutes' => Duration(minutes: scheduleInterval),
+        'days' => Duration(days: scheduleInterval),
+        _ => Duration(hours: scheduleInterval),
+      };
 
   List<ChatMessage> get contextMessages {
     switch (contextStrategy) {
@@ -539,6 +552,9 @@ class AgentChat {
     List<ChatBranch>? branches,
     String? activeBranchId,
     int? checkpointMessageCount,
+    String? schedulePrompt,
+    int? scheduleInterval,
+    String? scheduleUnit,
   }) =>
       AgentChat(
         id: id,
@@ -560,6 +576,9 @@ class AgentChat {
         activeBranchId: activeBranchId ?? this.activeBranchId,
         checkpointMessageCount:
             checkpointMessageCount ?? this.checkpointMessageCount,
+        schedulePrompt: schedulePrompt ?? this.schedulePrompt,
+        scheduleInterval: scheduleInterval ?? this.scheduleInterval,
+        scheduleUnit: scheduleUnit ?? this.scheduleUnit,
       );
 
   Map<String, Object> toJson({bool includeMessages = true}) => {
@@ -577,6 +596,9 @@ class AgentChat {
         'contextSummary': contextSummary,
         'summarizedMessageCount': summarizedMessageCount,
         'contextStrategy': contextStrategy.name,
+        'schedulePrompt': schedulePrompt,
+        'scheduleInterval': scheduleInterval,
+        'scheduleUnit': scheduleUnit,
         'windowSize': windowSize,
         'facts': facts,
         'branches': branches.map((branch) => branch.toJson()).toList(),
@@ -612,5 +634,8 @@ class AgentChat {
             .toList(growable: false),
         activeBranchId: json['activeBranchId'] as String?,
         checkpointMessageCount: json['checkpointMessageCount'] as int?,
+        schedulePrompt: json['schedulePrompt'] as String? ?? '',
+        scheduleInterval: json['scheduleInterval'] as int? ?? 1,
+        scheduleUnit: json['scheduleUnit'] as String? ?? 'hours',
       );
 }

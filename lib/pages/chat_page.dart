@@ -42,6 +42,8 @@ class _ChatPageState extends State<ChatPage> {
   ContextCompressor? _compressor;
   FactsUpdater? _factsUpdater;
   bool _compressing = false;
+  bool get _isGenerating =>
+      _generating || widget.repository.isChatScheduleGenerating(widget.chatId);
   int? _expandedSummaryCount;
   int? _expandedWindowCount;
   final _compressionForm = GlobalKey<FormState>();
@@ -77,7 +79,7 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   Future<void> _send({bool addUserMessage = true}) async {
-    if (_generating) return;
+    if (_isGenerating) return;
     final chat = widget.repository.chatById(widget.chatId);
     if (chat == null) return;
     if (!(_compressionForm.currentState?.validate() ?? true)) return;
@@ -130,7 +132,8 @@ class _ChatPageState extends State<ChatPage> {
       }
       if (!mounted) return;
     }
-    if (updatedChat.contextStrategy == ContextStrategy.stickyFacts) {
+    if (!updatedChat.isPeriodic &&
+        updatedChat.contextStrategy == ContextStrategy.stickyFacts) {
       setState(() => _compressing = true);
       final updater = FactsUpdater(widget.repository, widget.provider);
       _factsUpdater = updater;
@@ -221,6 +224,10 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   void _stop() {
+    if (widget.repository.isChatScheduleGenerating(widget.chatId)) {
+      widget.repository.stopChatSchedule(widget.chatId);
+      return;
+    }
     if (_compressing) {
       _compressor?.cancel();
       _factsUpdater?.cancel();
@@ -346,14 +353,17 @@ class _ChatPageState extends State<ChatPage> {
                   ((_generating && _streamingText.isNotEmpty)
                       ? estimateTokenCount(_streamingText)
                       : 0);
+          final periodicGenerating =
+              widget.repository.isChatScheduleGenerating(chat.id);
+          final generating = _generating || periodicGenerating;
           final contextLimit = agent.model.contextWindowTokens;
           final contextProgress =
               (totalTokens / contextLimit).clamp(0.0, 1.0).toDouble();
-          final wideHeader = MediaQuery.sizeOf(context).width >= 760;
+          final wideHeader = MediaQuery.sizeOf(context).width >= 1000;
           final hasSummary = chat.compressionEnabled &&
               chat.contextSummary.isNotEmpty &&
               chat.summarizedMessageCount > 0;
-          final stickyFactsActive =
+          final stickyFactsActive = !chat.isPeriodic &&
               chat.contextStrategy == ContextStrategy.stickyFacts;
           final slidingExcludedCount =
               chat.contextStrategy == ContextStrategy.slidingWindow &&
@@ -377,91 +387,101 @@ class _ChatPageState extends State<ChatPage> {
           return Scaffold(
             appBar: AppBar(
               toolbarHeight: 108,
-              title: Row(children: [
-                Expanded(
-                    child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                      Text(chat.title,
-                          maxLines: 1, overflow: TextOverflow.ellipsis),
-                      Text(
-                          '${agent.name} · ${project.title} · ${task.title} · ${agent.model.title}',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w400,
-                              color: Color(0xFF667085))),
-                      const SizedBox(height: 3),
-                      Row(children: [
-                        const Text('Состояние задачи: ',
-                            style: TextStyle(
-                                fontSize: 11, color: Color(0xFF667085))),
-                        Expanded(
-                          child: Text(
-                            taskState == null
-                                ? 'не настроено'
-                                : widget.repository.isTaskComplete(task)
-                                    ? '${taskState.name} · завершено'
-                                    : taskState.name,
-                            key: const Key('chatTaskState'),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.w700,
-                              color: taskState == null
-                                  ? const Color(0xFF667085)
-                                  : Color(taskState.colorValue),
+              title: Padding(
+                padding: EdgeInsets.only(right: wideHeader ? 64 : 0),
+                child: Row(children: [
+                  Expanded(
+                      flex: 2,
+                      child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(chat.title,
+                                maxLines: 1, overflow: TextOverflow.ellipsis),
+                            Text(
+                                '${agent.name} · ${project.title} · ${task.title} · ${agent.model.title}',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w400,
+                                    color: Color(0xFF667085))),
+                            const SizedBox(height: 3),
+                            Row(children: [
+                              const Text('Состояние задачи: ',
+                                  style: TextStyle(
+                                      fontSize: 11, color: Color(0xFF667085))),
+                              Expanded(
+                                child: Text(
+                                  taskState == null
+                                      ? 'не настроено'
+                                      : widget.repository.isTaskComplete(task)
+                                          ? '${taskState.name} · завершено'
+                                          : taskState.name,
+                                  key: const Key('chatTaskState'),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w700,
+                                    color: taskState == null
+                                        ? const Color(0xFF667085)
+                                        : Color(taskState.colorValue),
+                                  ),
+                                ),
+                              ),
+                            ]),
+                            const SizedBox(height: 5),
+                            Semantics(
+                              label:
+                                  'Использовано $totalTokens из $contextLimit токенов',
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(4),
+                                child: LinearProgressIndicator(
+                                  key: const Key('chatTokenProgress'),
+                                  value: contextProgress,
+                                  minHeight: 5,
+                                  backgroundColor: const Color(0xFFE1E6EF),
+                                  color: contextProgress >= 0.9
+                                      ? const Color(0xFFD92D20)
+                                      : contextProgress >= 0.75
+                                          ? const Color(0xFFF79009)
+                                          : const Color(0xFF3659D9),
+                                ),
+                              ),
                             ),
-                          ),
-                        ),
-                      ]),
-                      const SizedBox(height: 5),
-                      Semantics(
-                        label:
-                            'Использовано $totalTokens из $contextLimit токенов',
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(4),
-                          child: LinearProgressIndicator(
-                            key: const Key('chatTokenProgress'),
-                            value: contextProgress,
-                            minHeight: 5,
-                            backgroundColor: const Color(0xFFE1E6EF),
-                            color: contextProgress >= 0.9
-                                ? const Color(0xFFD92D20)
-                                : contextProgress >= 0.75
-                                    ? const Color(0xFFF79009)
-                                    : const Color(0xFF3659D9),
-                          ),
-                        ),
+                            const SizedBox(height: 3),
+                            Text(
+                              'Использовано ${formatTokenNumber(totalTokens)} из ${formatTokenNumber(contextLimit)} токенов',
+                              key: const Key('chatTotalTokens'),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w500,
+                                color: Color(0xFF667085),
+                              ),
+                            ),
+                          ])),
+                  if (wideHeader) ...[
+                    const SizedBox(width: 24),
+                    Expanded(
+                      flex: 2,
+                      child: SizedBox(
+                        height: 96,
+                        child: _contextSettings(chat),
                       ),
-                      const SizedBox(height: 3),
-                      Text(
-                        'Использовано ${formatTokenNumber(totalTokens)} из ${formatTokenNumber(contextLimit)} токенов',
-                        key: const Key('chatTotalTokens'),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w500,
-                          color: Color(0xFF667085),
-                        ),
-                      ),
-                    ])),
-                if (wideHeader) ...[
-                  const SizedBox(width: 24),
-                  SizedBox(width: 460, child: _contextSettings(chat)),
-                ],
-              ]),
+                    ),
+                  ],
+                ]),
+              ),
               bottom: wideHeader
                   ? null
                   : PreferredSize(
-                      preferredSize: const Size.fromHeight(82),
+                      preferredSize: const Size.fromHeight(112),
                       child: Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 16),
-                        child:
-                            SizedBox(height: 82, child: _contextSettings(chat)),
+                        child: SizedBox(
+                            height: 112, child: _contextSettings(chat)),
                       ),
                     ),
             ),
@@ -484,14 +504,14 @@ class _ChatPageState extends State<ChatPage> {
                                 child: _factsBlock(chat),
                               ),
                             Expanded(
-                              child: chat.messages.isEmpty && !_generating
+                              child: chat.messages.isEmpty && !generating
                                   ? _emptyChat(agent)
                                   : ListView.builder(
                                       controller: _scrollController,
                                       padding: const EdgeInsets.fromLTRB(
                                           16, 20, 16, 12),
                                       itemCount: historyItems +
-                                          ((_generating ||
+                                          ((generating ||
                                                   _streamingText.isNotEmpty)
                                               ? 1
                                               : 0),
@@ -837,7 +857,6 @@ class _ChatPageState extends State<ChatPage> {
 
   Widget _contextSettings(AgentChat chat) {
     String? validate(String? _) {
-      if (!chat.compressionEnabled) return null;
       final max = int.tryParse(_maxController.text);
       final min = int.tryParse(_minController.text);
       return max == null || min == null || min < 1 || min >= max
@@ -853,81 +872,222 @@ class _ChatPageState extends State<ChatPage> {
           min: int.parse(_minController.text));
     }
 
+    final running = widget.repository.isChatScheduleRunning(chat.id);
+    final periodic = chat.isPeriodic;
     return DefaultTextStyle.merge(
       style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w400),
       child: Form(
         key: _compressionForm,
-        child: Row(children: [
-          SizedBox(
-            width: 180,
-            child: InputDecorator(
-              decoration:
-                  const InputDecoration(labelText: 'Стратегия', isDense: true),
-              child: DropdownButtonHideUnderline(
-                child: DropdownButton<ContextStrategy>(
-                  key: const Key('contextStrategyDropdown'),
-                  value: chat.contextStrategy,
-                  isExpanded: true,
-                  isDense: true,
-                  items: ContextStrategy.values
-                      .map((strategy) => DropdownMenuItem(
-                            value: strategy,
-                            child: Text(_strategyTitle(strategy),
-                                overflow: TextOverflow.ellipsis),
-                          ))
-                      .toList(),
-                  onChanged: _generating
-                      ? null
-                      : (strategy) {
-                          if (strategy != null) {
-                            unawaited(_selectContextStrategy(chat, strategy));
-                          }
-                        },
+        child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Expanded(
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                const Padding(
+                    padding: EdgeInsets.only(top: 4, bottom: 2),
+                    child: Text('Стратегия')),
+                DropdownButtonHideUnderline(
+                  child: DropdownButton<ContextStrategy>(
+                    key: const Key('contextStrategyDropdown'),
+                    value: chat.contextStrategy,
+                    isExpanded: true,
+                    isDense: true,
+                    items: ContextStrategy.values
+                        .map((strategy) => DropdownMenuItem(
+                              value: strategy,
+                              child: Text(_strategyTitle(strategy),
+                                  overflow: TextOverflow.ellipsis),
+                            ))
+                        .toList(),
+                    onChanged: _isGenerating || periodic
+                        ? null
+                        : (strategy) {
+                            if (strategy != null) {
+                              unawaited(_selectContextStrategy(chat, strategy));
+                            }
+                          },
+                  ),
                 ),
-              ),
+                if (!periodic &&
+                    chat.contextStrategy == ContextStrategy.compression)
+                  Row(children: [
+                    Expanded(
+                        child: _numberField(
+                            key: const Key('compressionMaxField'),
+                            controller: _maxController,
+                            label: 'max',
+                            enabled: chat.compressionEnabled && !_isGenerating,
+                            validator: validate,
+                            onChanged: save)),
+                    const SizedBox(width: 6),
+                    Expanded(
+                        child: _numberField(
+                            key: const Key('compressionMinField'),
+                            controller: _minController,
+                            label: 'min',
+                            enabled: chat.compressionEnabled && !_isGenerating,
+                            validator: validate,
+                            onChanged: save)),
+                  ])
+                else if (chat.contextStrategy ==
+                        ContextStrategy.slidingWindow ||
+                    (!periodic &&
+                        chat.contextStrategy == ContextStrategy.stickyFacts))
+                  _numberField(
+                      key: const Key('contextWindowSizeField'),
+                      controller: _windowController,
+                      label: 'Последние N',
+                      enabled: !periodic && !_isGenerating,
+                      onChanged: (_) {
+                        final value = int.tryParse(_windowController.text);
+                        if (value != null && value >= 1 && value <= 200) {
+                          widget.repository.updateWindowSize(chat.id, value);
+                        }
+                      })
+                else if (!periodic &&
+                    chat.contextStrategy == ContextStrategy.branching)
+                  _branchControls(chat),
+              ])),
+          const VerticalDivider(width: 20, indent: 4, endIndent: 4),
+          Expanded(
+              child: Row(children: [
+            Expanded(
+                child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                  const Text('Расписание',
+                      style: TextStyle(fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 6),
+                  Text(
+                    periodic
+                        ? 'Каждые ${chat.scheduleInterval} ${_scheduleUnitLabel(chat.scheduleUnit)}'
+                        : 'Не настроено',
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: Color(0xFF667085)),
+                  ),
+                ])),
+            IconButton(
+                key: const Key('editChatSchedule'),
+                tooltip: 'Настроить расписание',
+                onPressed: () => _editChatSchedule(chat),
+                icon: Icon(Icons.edit_calendar_outlined,
+                    color: periodic ? const Color(0xFF3659D9) : null)),
+            IconButton.filledTonal(
+              key: Key(running
+                  ? 'stopChatSchedule-${chat.id}'
+                  : 'startChatSchedule-${chat.id}'),
+              tooltip:
+                  running ? 'Остановить расписание' : 'Запустить расписание',
+              onPressed: !periodic
+                  ? null
+                  : () {
+                      if (running) {
+                        widget.repository.stopChatSchedule(chat.id);
+                      } else {
+                        widget.repository
+                            .startChatSchedule(chat.id, widget.provider);
+                      }
+                    },
+              icon:
+                  Icon(running ? Icons.stop_rounded : Icons.play_arrow_rounded),
             ),
-          ),
-          const SizedBox(width: 8),
-          if (chat.contextStrategy == ContextStrategy.compression) ...[
-            Expanded(
-                child: _numberField(
-              key: const Key('compressionMaxField'),
-              controller: _maxController,
-              label: 'max',
-              enabled: chat.compressionEnabled && !_generating,
-              validator: validate,
-              onChanged: save,
-            )),
-            const SizedBox(width: 8),
-            Expanded(
-                child: _numberField(
-              key: const Key('compressionMinField'),
-              controller: _minController,
-              label: 'min',
-              enabled: chat.compressionEnabled && !_generating,
-              validator: validate,
-              onChanged: save,
-            )),
-          ] else if (chat.contextStrategy == ContextStrategy.slidingWindow ||
-              chat.contextStrategy == ContextStrategy.stickyFacts)
-            Expanded(
-                child: _numberField(
-              key: const Key('contextWindowSizeField'),
-              controller: _windowController,
-              label: 'Последние N',
-              enabled: !_generating,
-              onChanged: (_) {
-                final value = int.tryParse(_windowController.text);
-                if (value != null && value >= 1 && value <= 200) {
-                  widget.repository.updateWindowSize(chat.id, value);
-                }
-              },
-            ))
-          else if (chat.contextStrategy == ContextStrategy.branching)
-            Expanded(child: _branchControls(chat)),
+          ])),
         ]),
       ),
     );
+  }
+
+  String _scheduleUnitLabel(String unit) => switch (unit) {
+        'seconds' => 'сек.',
+        'minutes' => 'мин.',
+        'days' => 'дн.',
+        _ => 'ч.',
+      };
+
+  Future<void> _editChatSchedule(AgentChat chat) async {
+    final prompt = TextEditingController(text: chat.schedulePrompt);
+    final interval = TextEditingController(text: '${chat.scheduleInterval}');
+    var unit = chat.scheduleUnit;
+    final result =
+        await showDialog<({String prompt, int interval, String unit})>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+          builder: (context, refresh) => AlertDialog(
+                title: const Text('Расписание чата'),
+                content: SizedBox(
+                    width: 520,
+                    child: Column(mainAxisSize: MainAxisSize.min, children: [
+                      TextField(
+                          controller: prompt,
+                          minLines: 2,
+                          maxLines: 5,
+                          decoration: const InputDecoration(
+                              labelText: 'Запрос пользователя',
+                              hintText:
+                                  'Будет повторно отправляться по расписанию')),
+                      const SizedBox(height: 12),
+                      Row(children: [
+                        Expanded(
+                            child: TextField(
+                                controller: interval,
+                                keyboardType: TextInputType.number,
+                                decoration: const InputDecoration(
+                                    labelText: 'Период'))),
+                        const SizedBox(width: 12),
+                        Expanded(
+                            child: DropdownButtonFormField<String>(
+                          initialValue: unit,
+                          decoration:
+                              const InputDecoration(labelText: 'Единица'),
+                          items: const [
+                            DropdownMenuItem(
+                                value: 'seconds', child: Text('Секунды')),
+                            DropdownMenuItem(
+                                value: 'minutes', child: Text('Минуты')),
+                            DropdownMenuItem(
+                                value: 'hours', child: Text('Часы')),
+                            DropdownMenuItem(value: 'days', child: Text('Дни')),
+                          ],
+                          onChanged: (value) {
+                            if (value != null) refresh(() => unit = value);
+                          },
+                        )),
+                      ]),
+                      const SizedBox(height: 8),
+                      const Text(
+                          'Для периодического чата автоматически включается Sliding Window с одним сообщением.',
+                          style: TextStyle(
+                              color: Color(0xFF667085), fontSize: 12)),
+                    ])),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(dialogContext),
+                      child: const Text('Отмена')),
+                  FilledButton(
+                      onPressed: () {
+                        final value = int.tryParse(interval.text.trim());
+                        if (value == null || value < 1 || value > 100000) {
+                          return;
+                        }
+                        Navigator.pop(dialogContext, (
+                          prompt: prompt.text.trim(),
+                          interval: value,
+                          unit: unit
+                        ));
+                      },
+                      child: const Text('Сохранить')),
+                ],
+              )),
+    );
+    prompt.dispose();
+    interval.dispose();
+    if (result != null) {
+      widget.repository.updateChatSchedule(chat.id,
+          prompt: result.prompt, interval: result.interval, unit: result.unit);
+      if (result.prompt.isNotEmpty) _windowController.text = '1';
+    }
   }
 
   String _strategyTitle(ContextStrategy strategy) => switch (strategy) {
@@ -1128,7 +1288,7 @@ class _ChatPageState extends State<ChatPage> {
                 focusNode: _focusNode,
                 minLines: 1,
                 maxLines: 6,
-                enabled: !_generating,
+                enabled: !_isGenerating,
                 textInputAction: TextInputAction.newline,
                 decoration: const InputDecoration(
                   hintText: 'Введите сообщение…',
@@ -1138,7 +1298,7 @@ class _ChatPageState extends State<ChatPage> {
             ),
           ),
           const SizedBox(width: 10),
-          if (_generating)
+          if (_isGenerating)
             IconButton.filled(
               key: const Key('stopGenerationButton'),
               tooltip: 'Остановить генерацию',
