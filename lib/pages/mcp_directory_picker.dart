@@ -84,7 +84,7 @@ class _McpDirectoryPickerState extends State<McpDirectoryPicker> {
                 icon: const Icon(Icons.arrow_upward),
               ),
               Expanded(
-                  child: SelectableText(_current ?? 'Разрешённые каталоги',
+                  child: SelectableText(_current ?? 'Корень файловой системы',
                       maxLines: 2)),
             ]),
             if (_loading) const LinearProgressIndicator(),

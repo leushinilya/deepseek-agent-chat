@@ -106,6 +106,28 @@ class AgentsPage extends StatelessWidget {
               const SizedBox(height: 3),
               Text(agent.model.title,
                   style: const TextStyle(color: Color(0xFF667085))),
+              if (agent.mcpServers.isNotEmpty) ...[
+                const SizedBox(height: 6),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 4,
+                  children: [
+                    for (final server in agent.mcpServers)
+                      Chip(
+                        key: Key('agentMcp-${agent.id}-${server.id}'),
+                        avatar: Icon(server.type == 'fetch'
+                            ? Icons.language
+                            : Icons.folder_outlined),
+                        label: Text(server.name),
+                        visualDensity: VisualDensity.compact,
+                      ),
+                  ],
+                ),
+              ] else ...[
+                const SizedBox(height: 4),
+                const Text('MCP не подключены',
+                    style: TextStyle(color: Color(0xFF98A2B3), fontSize: 12)),
+              ],
               Text('Изменён ${formatDate(agent.updatedAt)}',
                   style:
                       const TextStyle(color: Color(0xFF98A2B3), fontSize: 12)),
@@ -129,7 +151,10 @@ class AgentsPage extends StatelessWidget {
   Future<void> _edit(BuildContext context, [AiAgent? agent]) async {
     final result = await showDialog<_AgentDraft>(
       context: context,
-      builder: (_) => _AgentDialog(agent: agent),
+      builder: (_) => _AgentDialog(
+        agent: agent,
+        availableMcpServers: repository.mcpServers,
+      ),
     );
     if (result == null) return;
     if (agent == null) {
@@ -137,12 +162,14 @@ class AgentsPage extends StatelessWidget {
         name: result.name,
         systemPrompt: result.systemPrompt,
         model: result.model,
+        mcpServers: result.mcpServers,
       );
     } else {
       repository.updateAgent(agent.copyWith(
         name: result.name,
         systemPrompt: result.systemPrompt,
         model: result.model,
+        mcpServers: result.mcpServers,
       ));
     }
   }
@@ -188,15 +215,17 @@ class AgentsPage extends StatelessWidget {
 }
 
 class _AgentDraft {
-  const _AgentDraft(this.name, this.systemPrompt, this.model);
+  const _AgentDraft(this.name, this.systemPrompt, this.model, this.mcpServers);
   final String name;
   final String systemPrompt;
   final AgentModel model;
+  final List<McpServer> mcpServers;
 }
 
 class _AgentDialog extends StatefulWidget {
-  const _AgentDialog({this.agent});
+  const _AgentDialog({this.agent, required this.availableMcpServers});
   final AiAgent? agent;
+  final List<McpServer> availableMcpServers;
 
   @override
   State<_AgentDialog> createState() => _AgentDialogState();
@@ -207,6 +236,8 @@ class _AgentDialogState extends State<_AgentDialog> {
   late final _name = TextEditingController(text: widget.agent?.name);
   late final _prompt = TextEditingController(text: widget.agent?.systemPrompt);
   late var _model = widget.agent?.model ?? AgentModel.localGigaChat;
+  late final Set<String> _selectedMcpIds =
+      widget.agent?.mcpServers.map((server) => server.id).toSet() ?? {};
 
   @override
   void dispose() {
@@ -261,6 +292,47 @@ class _AgentDialogState extends State<_AgentDialog> {
                     if (value != null) setState(() => _model = value);
                   },
                 ),
+                const SizedBox(height: 18),
+                const Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text('MCP-серверы',
+                      style: TextStyle(fontWeight: FontWeight.w700)),
+                ),
+                const Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text('Подключите до 5 ранее созданных серверов.'),
+                ),
+                if (widget.availableMcpServers.isEmpty)
+                  const ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(
+                        'Сначала создайте MCP в разделе «Настройки → MCP».'),
+                  )
+                else
+                  for (final server in widget.availableMcpServers)
+                    CheckboxListTile(
+                      key: Key('agentMcpSelection-${server.id}'),
+                      contentPadding: EdgeInsets.zero,
+                      value: _selectedMcpIds.contains(server.id),
+                      title: Text(server.name),
+                      subtitle: Text(server.type == 'fetch'
+                          ? 'Чтение веб-страниц'
+                          : server.directories.join(', ')),
+                      secondary: Icon(server.type == 'fetch'
+                          ? Icons.language
+                          : Icons.folder_outlined),
+                      controlAffinity: ListTileControlAffinity.leading,
+                      onChanged: !_selectedMcpIds.contains(server.id) &&
+                              _selectedMcpIds.length >= 5
+                          ? null
+                          : (checked) => setState(() {
+                                if (checked == true) {
+                                  _selectedMcpIds.add(server.id);
+                                } else {
+                                  _selectedMcpIds.remove(server.id);
+                                }
+                              }),
+                    ),
               ]),
             ),
           ),
@@ -273,8 +345,16 @@ class _AgentDialogState extends State<_AgentDialog> {
             key: const Key('saveAgentButton'),
             onPressed: () {
               if (!_formKey.currentState!.validate()) return;
-              Navigator.pop(context,
-                  _AgentDraft(_name.text.trim(), _prompt.text.trim(), _model));
+              Navigator.pop(
+                  context,
+                  _AgentDraft(
+                    _name.text.trim(),
+                    _prompt.text.trim(),
+                    _model,
+                    widget.availableMcpServers
+                        .where((server) => _selectedMcpIds.contains(server.id))
+                        .toList(growable: false),
+                  ));
             },
             child: const Text('Сохранить'),
           ),

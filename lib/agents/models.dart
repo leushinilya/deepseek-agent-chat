@@ -103,22 +103,29 @@ class AiAgent {
 }
 
 class McpServer {
-  const McpServer({required this.id, required this.directories});
+  const McpServer(
+      {required this.id,
+      this.type = 'filesystem',
+      this.directories = const []});
 
   final String id;
+  final String type;
   final List<String> directories;
-  String get name => 'Filesystem';
+  String get name => type == 'fetch' ? 'Чтение сайтов' : 'Файловая система';
 
   Map<String, Object> toJson() =>
-      {'id': id, 'type': 'filesystem', 'directories': directories};
+      {'id': id, 'type': type, 'directories': directories};
 
   factory McpServer.fromJson(Map<String, dynamic> json) {
-    if (json['type'] != 'filesystem') {
+    final type = json['type'] ?? 'filesystem';
+    if (type != 'filesystem' && type != 'fetch') {
       throw const FormatException('Unknown MCP server');
     }
     return McpServer(
       id: json['id'] as String,
-      directories: (json['directories'] as List<dynamic>).cast<String>(),
+      type: type as String,
+      directories:
+          (json['directories'] as List<dynamic>? ?? const []).cast<String>(),
     );
   }
 }

@@ -3,12 +3,12 @@ import express from 'express';
 
 import {UpstreamError} from './deepseek.js';
 import {baseSystemPrompt} from './prompts.js';
-import {browseMcpDirectories, openFilesystemServer} from './mcp.js';
+import {browseMcpDirectories, openMcpServer} from './mcp.js';
 
 export const limits = Object.freeze({maxQueryLength: 8000});
 const supportedModels = new Set(['local-gigachat', 'deepseek-v4-flash', 'deepseek-v4-pro']);
 
-export function createApp({deepseek, ollama, frontendOrigin, openMcp = openFilesystemServer}) {
+export function createApp({deepseek, ollama, frontendOrigin, openMcp = openMcpServer}) {
   const app = express();
   if (frontendOrigin) app.use(cors({origin: frontendOrigin, methods: ['GET', 'POST']}));
   app.use(express.json({limit: '100kb'}));
@@ -21,10 +21,8 @@ export function createApp({deepseek, ollama, frontendOrigin, openMcp = openFiles
       }
       return res.json(await browseMcpDirectories(path));
     } catch (error) {
-      const status = error?.message?.includes('MCP_ALLOWED_ROOTS') ? 503 : 400;
-      return res.status(status).json({error: status === 503 ||
-        error?.message?.startsWith('Каталог не найден:')
-        ? error.message : 'Не удалось открыть каталог в разрешённой области MCP.'});
+      return res.status(400).json({error: error?.message?.startsWith('Каталог не найден:')
+        ? error.message : 'Не удалось открыть каталог.'});
     }
   });
 
@@ -34,7 +32,7 @@ export function createApp({deepseek, ollama, frontendOrigin, openMcp = openFiles
     }
     let connection;
     try {
-      connection = await openMcp(req.body.directories);
+      connection = await openMcp(req.body.type === 'filesystem' ? req.body.directories : req.body);
       return res.json(await connection.listTools());
     } catch (error) {
       return res.status(502).json({error: `Не удалось получить список инструментов MCP: ${error.message}`});
@@ -241,8 +239,9 @@ export function validateChatInput(body) {
 }
 
 function isValidMcpServer(server) {
-  return server && typeof server === 'object' && !Array.isArray(server) &&
-    server.type === 'filesystem' && Array.isArray(server.directories) &&
+  if (!server || typeof server !== 'object' || Array.isArray(server)) return false;
+  if (server.type === 'fetch') return Array.isArray(server.directories) && server.directories.length === 0;
+  return server.type === 'filesystem' && Array.isArray(server.directories) &&
     server.directories.length >= 1 && server.directories.length <= 10 &&
     server.directories.every(path => typeof path === 'string' &&
       path.startsWith('/') && path.length <= 1000);
@@ -256,16 +255,19 @@ async function chatWithMcp(body, messages, provider, openMcp, signal) {
     for (const [index, config] of body.mcpServers.entries()) {
       let connection;
       try {
-        connection = await openMcp(config.directories);
+        connection = await openMcp(config.type === 'filesystem' ? config.directories : config);
       } catch (error) {
         throw new UpstreamError(`Не удалось запустить MCP: ${error.message}`, 400, 'mcp_error');
       }
       connections.push(connection);
       const listed = await connection.listTools();
       for (const tool of listed.tools ?? []) {
-        const name = `filesystem_${index}_${tool.name}`;
+        const name = `${config.type}_${index}_${tool.name}`;
+        const description = config.type === 'fetch' && tool.name === 'fetch'
+          ? 'Fetches a URL from the internet and extracts the page contents as Markdown.'
+          : tool.description ?? '';
         tools.push({type: 'function', function: {
-          name, description: tool.description ?? '',
+          name, description,
           parameters: tool.inputSchema ?? {type: 'object', properties: {}},
         }});
         toolMap.set(name, {connection, name: tool.name});

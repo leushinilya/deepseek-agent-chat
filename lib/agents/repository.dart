@@ -37,13 +37,14 @@ class AgentChatRepository extends ChangeNotifier {
       : memory = MemoryRepository(_store, clock: _clock);
 
   static const _storageKey = 'ai_agents_and_chats_v1';
-  static const _schemaVersion = 9;
+  static const _schemaVersion = 10;
 
   final KeyValueStore _store;
   final DateTime Function() _clock;
   final MemoryRepository memory;
   final _random = Random();
   final List<AiAgent> _agents = [];
+  final List<McpServer> _mcpServers = [];
   final List<AgentProject> _projects = [];
   final List<TaskStateModel> _stateModels = [];
   final List<AgentTask> _tasks = [];
@@ -57,6 +58,7 @@ class AgentChatRepository extends ChangeNotifier {
   bool isLoaded = false;
   String? loadError;
   List<AiAgent> get agents => List.unmodifiable(_agents);
+  List<McpServer> get mcpServers => List.unmodifiable(_mcpServers);
   UserProfile get userProfile => _userProfile;
   List<AgentProject> get projects {
     final result = [..._projects]
@@ -99,6 +101,18 @@ class AgentChatRepository extends ChangeNotifier {
           ..clear()
           ..addAll((json['agents'] as List<dynamic>? ?? const [])
               .map((item) => AiAgent.fromJson(item as Map<String, dynamic>)));
+        _mcpServers
+          ..clear()
+          ..addAll((json['mcpServers'] as List<dynamic>? ?? const [])
+              .map((item) => McpServer.fromJson(item as Map<String, dynamic>)));
+        // Migrate server definitions saved inside agents by earlier versions.
+        for (final agent in _agents) {
+          for (final server in agent.mcpServers) {
+            if (!_mcpServers.any((item) => item.id == server.id)) {
+              _mcpServers.add(server);
+            }
+          }
+        }
         _projects
           ..clear()
           ..addAll((json['projects'] as List<dynamic>? ?? const []).map(
@@ -187,6 +201,7 @@ class AgentChatRepository extends ChangeNotifier {
     required String name,
     required String systemPrompt,
     required AgentModel model,
+    List<McpServer> mcpServers = const [],
   }) {
     final now = _clock();
     final agent = AiAgent(
@@ -194,6 +209,7 @@ class AgentChatRepository extends ChangeNotifier {
       name: _required(name, 'Введите имя агента.'),
       systemPrompt: _required(systemPrompt, 'Введите системный промт.'),
       model: model,
+      mcpServers: List.unmodifiable(mcpServers),
       createdAt: now,
       updatedAt: now,
     );
@@ -232,6 +248,48 @@ class AgentChatRepository extends ChangeNotifier {
       systemPrompt: _required(agent.systemPrompt, 'Введите системный промт.'),
       updatedAt: _clock(),
     );
+    _changed();
+  }
+
+  McpServer createMcpServer(
+      {required String type, required List<String> directories}) {
+    final server = McpServer(
+      id: _id('mcp'),
+      type: type,
+      directories: List.unmodifiable(directories),
+    );
+    _mcpServers.add(server);
+    _changed();
+    return server;
+  }
+
+  void updateMcpServer(McpServer server) {
+    final index = _mcpServers.indexWhere((item) => item.id == server.id);
+    if (index < 0) throw StateError('MCP server not found');
+    _mcpServers[index] = server;
+    for (var i = 0; i < _agents.length; i++) {
+      final agent = _agents[i];
+      if (!agent.mcpServers.any((item) => item.id == server.id)) continue;
+      _agents[i] = agent.copyWith(
+        mcpServers: agent.mcpServers
+            .map((item) => item.id == server.id ? server : item)
+            .toList(growable: false),
+        updatedAt: _clock(),
+      );
+    }
+    _changed();
+  }
+
+  void deleteMcpServer(String id) {
+    _mcpServers.removeWhere((item) => item.id == id);
+    for (var i = 0; i < _agents.length; i++) {
+      final agent = _agents[i];
+      if (!agent.mcpServers.any((item) => item.id == id)) continue;
+      _agents[i] = agent.copyWith(
+        mcpServers: agent.mcpServers.where((item) => item.id != id).toList(),
+        updatedAt: _clock(),
+      );
+    }
     _changed();
   }
 
@@ -911,6 +969,7 @@ class AgentChatRepository extends ChangeNotifier {
       'version': _schemaVersion,
       'userProfile': _userProfile.toJson(),
       'agents': _agents.map((agent) => agent.toJson()).toList(),
+      'mcpServers': _mcpServers.map((server) => server.toJson()).toList(),
       'projects': _projects.map((project) => project.toJson()).toList(),
       'stateModels': _stateModels.map((model) => model.toJson()).toList(),
       'tasks': _tasks.map((task) => task.toJson()).toList(),
