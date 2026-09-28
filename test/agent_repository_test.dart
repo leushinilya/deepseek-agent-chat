@@ -46,6 +46,25 @@ void main() {
         ['/tmp/project']);
   });
 
+  test('selected RAGs survive reload and legacy selection migrates', () async {
+    final agent = repository.createAgent(
+      name: 'Researcher',
+      systemPrompt: 'Use sources',
+      model: AgentModel.deepseekFlash,
+      ragIds: const ['rag-1', 'rag-2'],
+    );
+    await repository.settled;
+    final restored = AgentChatRepository(store);
+    await restored.load();
+    expect(restored.agentById(agent.id)!.ragIds, ['rag-1', 'rag-2']);
+    restored.updateAgent(restored.agentById(agent.id)!.copyWith(ragIds: []));
+    expect(restored.agentById(agent.id)!.ragIds, isEmpty);
+    final legacy = Map<String, dynamic>.from(agent.toJson())
+      ..remove('ragIds')
+      ..['ragId'] = 'rag-old';
+    expect(AiAgent.fromJson(legacy).ragIds, ['rag-old']);
+  });
+
   test('creates chat, names it from first message and restores history',
       () async {
     final agent = repository.createAgent(

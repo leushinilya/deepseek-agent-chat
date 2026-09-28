@@ -5,6 +5,8 @@ build/
 .flutter-plugins-dependencies
 backend/node_modules/
 backend/.env
+data/
+backend/data/
 
 # FVM Version Cache
 .fvm/

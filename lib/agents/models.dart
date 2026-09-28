@@ -52,6 +52,7 @@ class AiAgent {
     required this.createdAt,
     required this.updatedAt,
     this.mcpServers = const [],
+    this.ragIds = const [],
   });
 
   final String id;
@@ -61,6 +62,7 @@ class AiAgent {
   final DateTime createdAt;
   final DateTime updatedAt;
   final List<McpServer> mcpServers;
+  final List<String> ragIds;
 
   AiAgent copyWith({
     String? name,
@@ -68,6 +70,7 @@ class AiAgent {
     AgentModel? model,
     DateTime? updatedAt,
     List<McpServer>? mcpServers,
+    List<String>? ragIds,
   }) =>
       AiAgent(
         id: id,
@@ -77,6 +80,7 @@ class AiAgent {
         createdAt: createdAt,
         updatedAt: updatedAt ?? this.updatedAt,
         mcpServers: mcpServers ?? this.mcpServers,
+        ragIds: ragIds ?? this.ragIds,
       );
 
   Map<String, Object> toJson() => {
@@ -87,6 +91,7 @@ class AiAgent {
         'createdAt': createdAt.toIso8601String(),
         'updatedAt': updatedAt.toIso8601String(),
         'mcpServers': mcpServers.map((server) => server.toJson()).toList(),
+        'ragIds': ragIds,
       };
 
   factory AiAgent.fromJson(Map<String, dynamic> json) => AiAgent(
@@ -99,6 +104,11 @@ class AiAgent {
         mcpServers: (json['mcpServers'] as List<dynamic>? ?? const [])
             .map((value) => McpServer.fromJson(value as Map<String, dynamic>))
             .toList(growable: false),
+        ragIds: json['ragIds'] is List
+            ? (json['ragIds'] as List).cast<String>()
+            : json['ragId'] is String
+                ? [json['ragId'] as String]
+                : const [],
       );
 }
 

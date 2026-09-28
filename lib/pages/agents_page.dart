@@ -1,4 +1,7 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 
 import '../agents/models.dart';
 import '../agents/repository.dart';
@@ -7,10 +10,12 @@ import '../widgets/app_surface.dart';
 class AgentsPage extends StatelessWidget {
   const AgentsPage({
     required this.repository,
+    this.ragClient,
     super.key,
   });
 
   final AgentChatRepository repository;
+  final http.Client? ragClient;
 
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
@@ -106,6 +111,14 @@ class AgentsPage extends StatelessWidget {
               const SizedBox(height: 3),
               Text(agent.model.title,
                   style: const TextStyle(color: Color(0xFF667085))),
+              if (agent.ragIds.isNotEmpty) ...[
+                const SizedBox(height: 6),
+                Chip(
+                  avatar: const Icon(Icons.menu_book_outlined),
+                  label: Text('RAG: ${agent.ragIds.length}'),
+                  visualDensity: VisualDensity.compact,
+                ),
+              ],
               if (agent.mcpServers.isNotEmpty) ...[
                 const SizedBox(height: 6),
                 Wrap(
@@ -154,6 +167,7 @@ class AgentsPage extends StatelessWidget {
       builder: (_) => _AgentDialog(
         agent: agent,
         availableMcpServers: repository.mcpServers,
+        ragClient: ragClient,
       ),
     );
     if (result == null) return;
@@ -163,6 +177,7 @@ class AgentsPage extends StatelessWidget {
         systemPrompt: result.systemPrompt,
         model: result.model,
         mcpServers: result.mcpServers,
+        ragIds: result.ragIds,
       );
     } else {
       repository.updateAgent(agent.copyWith(
@@ -170,6 +185,7 @@ class AgentsPage extends StatelessWidget {
         systemPrompt: result.systemPrompt,
         model: result.model,
         mcpServers: result.mcpServers,
+        ragIds: result.ragIds,
       ));
     }
   }
@@ -215,17 +231,30 @@ class AgentsPage extends StatelessWidget {
 }
 
 class _AgentDraft {
-  const _AgentDraft(this.name, this.systemPrompt, this.model, this.mcpServers);
+  const _AgentDraft(
+      this.name, this.systemPrompt, this.model, this.mcpServers, this.ragIds);
   final String name;
   final String systemPrompt;
   final AgentModel model;
   final List<McpServer> mcpServers;
+  final List<String> ragIds;
+}
+
+class _SelectionOption {
+  const _SelectionOption(this.id, this.label,
+      {this.detail, this.enabled = true});
+  final String id;
+  final String label;
+  final String? detail;
+  final bool enabled;
 }
 
 class _AgentDialog extends StatefulWidget {
-  const _AgentDialog({this.agent, required this.availableMcpServers});
+  const _AgentDialog(
+      {this.agent, required this.availableMcpServers, this.ragClient});
   final AiAgent? agent;
   final List<McpServer> availableMcpServers;
+  final http.Client? ragClient;
 
   @override
   State<_AgentDialog> createState() => _AgentDialogState();
@@ -238,6 +267,40 @@ class _AgentDialogState extends State<_AgentDialog> {
   late var _model = widget.agent?.model ?? AgentModel.localGigaChat;
   late final Set<String> _selectedMcpIds =
       widget.agent?.mcpServers.map((server) => server.id).toSet() ?? {};
+  late final Set<String> _selectedRagIds = widget.agent?.ragIds.toSet() ?? {};
+  List<Map<String, dynamic>> _rags = [];
+  bool _loadingRags = true;
+  String? _ragError;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadRags();
+  }
+
+  Future<void> _loadRags() async {
+    const baseUrl = String.fromEnvironment('API_BASE_URL',
+        defaultValue: 'http://localhost:3000');
+    final client = widget.ragClient ?? http.Client();
+    try {
+      final response = await client
+          .get(Uri.parse('$baseUrl/api/rags'))
+          .timeout(const Duration(seconds: 10));
+      if (response.statusCode != 200) throw const FormatException();
+      final payload =
+          jsonDecode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
+      if (!mounted) return;
+      setState(
+          () => _rags = (payload['rags'] as List).cast<Map<String, dynamic>>());
+    } catch (_) {
+      if (mounted) {
+        setState(() => _ragError = 'Не удалось загрузить список RAG.');
+      }
+    } finally {
+      if (mounted) setState(() => _loadingRags = false);
+      if (widget.ragClient == null) client.close();
+    }
+  }
 
   @override
   void dispose() {
@@ -248,6 +311,143 @@ class _AgentDialogState extends State<_AgentDialog> {
 
   String? _required(String? value) =>
       value == null || value.trim().isEmpty ? 'Обязательное поле' : null;
+
+  List<_SelectionOption> get _mcpOptions => [
+        for (final server in widget.availableMcpServers)
+          _SelectionOption(
+              server.id,
+              server.type == 'fetch'
+                  ? server.name
+                  : '${server.name}: ${server.directories.join(', ')}',
+              detail: server.type == 'fetch'
+                  ? 'Чтение веб-страниц'
+                  : server.directories.join(', ')),
+      ];
+
+  List<_SelectionOption> get _ragOptions => [
+        for (final rag in _rags)
+          _SelectionOption(rag['id'] as String, rag['name'] as String,
+              detail: rag['status'] == 'indexed'
+                  ? '${rag['documentCount'] ?? 0} документов'
+                  : 'Ожидает индексации',
+              enabled: rag['status'] == 'indexed'),
+        for (final id in _selectedRagIds)
+          if (!_rags.any((rag) => rag['id'] == id))
+            _SelectionOption(id, 'Недоступный RAG ($id)', enabled: false),
+      ];
+
+  Widget _selectionButton({
+    required String label,
+    required String keyName,
+    required String optionKeyPrefix,
+    required List<_SelectionOption> options,
+    required Set<String> selected,
+    required String emptyMessage,
+    int? maxSelected,
+  }) {
+    final names = options
+        .where((option) => selected.contains(option.id))
+        .map((option) => option.label)
+        .toList();
+    return SizedBox(
+      width: double.infinity,
+      child: OutlinedButton(
+        key: Key(keyName),
+        onPressed: () => _chooseOptions(
+            label: label,
+            optionKeyPrefix: optionKeyPrefix,
+            options: options,
+            selected: selected,
+            emptyMessage: emptyMessage,
+            maxSelected: maxSelected),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          child: Row(children: [
+            Expanded(
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(label,
+                        style: const TextStyle(fontWeight: FontWeight.w700)),
+                    Text(names.isEmpty ? 'Ничего не выбрано' : names.join(', '),
+                        maxLines: 2, overflow: TextOverflow.ellipsis),
+                  ]),
+            ),
+            const Icon(Icons.arrow_drop_down),
+          ]),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _chooseOptions({
+    required String label,
+    required String optionKeyPrefix,
+    required List<_SelectionOption> options,
+    required Set<String> selected,
+    required String emptyMessage,
+    int? maxSelected,
+  }) async {
+    final draft = {...selected};
+    final result = await showDialog<Set<String>>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, update) => AlertDialog(
+          title: Text(label),
+          content: SizedBox(
+            width: 480,
+            height: options.isEmpty
+                ? 90
+                : (options.length * 74.0).clamp(90.0, 400.0),
+            child: options.isEmpty
+                ? Center(child: Text(emptyMessage))
+                : ListView.builder(
+                    itemCount: options.length,
+                    itemBuilder: (context, index) {
+                      final option = options[index];
+                      final checked = draft.contains(option.id);
+                      return CheckboxListTile(
+                        key: Key('$optionKeyPrefix-${option.id}'),
+                        value: checked,
+                        title: Text(option.label),
+                        subtitle:
+                            option.detail == null ? null : Text(option.detail!),
+                        controlAffinity: ListTileControlAffinity.leading,
+                        onChanged: (!option.enabled && !checked) ||
+                                (!checked &&
+                                    maxSelected != null &&
+                                    draft.length >= maxSelected)
+                            ? null
+                            : (value) => update(() {
+                                  if (value == true) {
+                                    draft.add(option.id);
+                                  } else {
+                                    draft.remove(option.id);
+                                  }
+                                }),
+                      );
+                    },
+                  ),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('Отмена')),
+            FilledButton(
+                onPressed: () => Navigator.pop(dialogContext, draft),
+                child: const Text('Готово')),
+          ],
+        ),
+      ),
+    );
+    if (result != null && mounted) {
+      setState(() {
+        selected
+          ..clear()
+          ..addAll(result);
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) => AlertDialog(
@@ -293,46 +493,38 @@ class _AgentDialogState extends State<_AgentDialog> {
                   },
                 ),
                 const SizedBox(height: 18),
-                const Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text('MCP-серверы',
-                      style: TextStyle(fontWeight: FontWeight.w700)),
+                _selectionButton(
+                  label: 'RAG',
+                  keyName: 'agentRagButton',
+                  optionKeyPrefix: 'agentRagSelection',
+                  options: _ragOptions,
+                  selected: _selectedRagIds,
+                  emptyMessage: 'Сначала создайте RAG в настройках.',
                 ),
-                const Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text('Подключите до 5 ранее созданных серверов.'),
+                if (_loadingRags) const LinearProgressIndicator(),
+                if (_ragError != null)
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(_ragError!,
+                        style: TextStyle(
+                            color: Theme.of(context).colorScheme.error)),
+                  ),
+                if (!_loadingRags && _rags.isEmpty && _ragError == null)
+                  const Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                        'Сначала создайте и проиндексируйте RAG в настройках.'),
+                  ),
+                const SizedBox(height: 18),
+                _selectionButton(
+                  label: 'MCP-серверы',
+                  keyName: 'agentMcpButton',
+                  optionKeyPrefix: 'agentMcpSelection',
+                  options: _mcpOptions,
+                  selected: _selectedMcpIds,
+                  emptyMessage: 'Сначала создайте MCP в настройках.',
+                  maxSelected: 5,
                 ),
-                if (widget.availableMcpServers.isEmpty)
-                  const ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: Text(
-                        'Сначала создайте MCP в разделе «Настройки → MCP».'),
-                  )
-                else
-                  for (final server in widget.availableMcpServers)
-                    CheckboxListTile(
-                      key: Key('agentMcpSelection-${server.id}'),
-                      contentPadding: EdgeInsets.zero,
-                      value: _selectedMcpIds.contains(server.id),
-                      title: Text(server.name),
-                      subtitle: Text(server.type == 'fetch'
-                          ? 'Чтение веб-страниц'
-                          : server.directories.join(', ')),
-                      secondary: Icon(server.type == 'fetch'
-                          ? Icons.language
-                          : Icons.folder_outlined),
-                      controlAffinity: ListTileControlAffinity.leading,
-                      onChanged: !_selectedMcpIds.contains(server.id) &&
-                              _selectedMcpIds.length >= 5
-                          ? null
-                          : (checked) => setState(() {
-                                if (checked == true) {
-                                  _selectedMcpIds.add(server.id);
-                                } else {
-                                  _selectedMcpIds.remove(server.id);
-                                }
-                              }),
-                    ),
               ]),
             ),
           ),
@@ -354,6 +546,7 @@ class _AgentDialogState extends State<_AgentDialog> {
                     widget.availableMcpServers
                         .where((server) => _selectedMcpIds.contains(server.id))
                         .toList(growable: false),
+                    _selectedRagIds.toList(growable: false),
                   ));
             },
             child: const Text('Сохранить'),

@@ -45,7 +45,7 @@ void main() {
             ));
     final events = await provider
         .send(LlmRequest(
-            agent: agent,
+            agent: agent.copyWith(ragIds: const ['rag-1', 'rag-2']),
             messages: messages,
             summary: 'Prior summary',
             facts: const {'goal': 'Ship'},
@@ -98,6 +98,7 @@ void main() {
     expect(body['provider'], 'deepseek');
     expect(body['model'], 'deepseek-v4-pro');
     expect(body['systemPrompt'], 'System only');
+    expect(body['ragIds'], ['rag-1', 'rag-2']);
     expect(body['contextSummary'], 'Prior summary');
     expect(body['contextFacts'], {'goal': 'Ship'});
     expect(body['workingMemory'], 'Finish login screen');

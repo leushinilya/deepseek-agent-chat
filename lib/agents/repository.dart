@@ -202,6 +202,7 @@ class AgentChatRepository extends ChangeNotifier {
     required String systemPrompt,
     required AgentModel model,
     List<McpServer> mcpServers = const [],
+    List<String> ragIds = const [],
   }) {
     final now = _clock();
     final agent = AiAgent(
@@ -210,6 +211,7 @@ class AgentChatRepository extends ChangeNotifier {
       systemPrompt: _required(systemPrompt, 'Введите системный промт.'),
       model: model,
       mcpServers: List.unmodifiable(mcpServers),
+      ragIds: List.unmodifiable(ragIds),
       createdAt: now,
       updatedAt: now,
     );

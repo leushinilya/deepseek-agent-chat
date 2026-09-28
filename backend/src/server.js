@@ -3,6 +3,7 @@ import 'dotenv/config';
 import {createApp} from './app.js';
 import {createDeepSeekClient} from './deepseek.js';
 import {createOllamaClient} from './ollama.js';
+import {createOllamaEmbedder, RagStore} from './rag.js';
 
 const apiKey = process.env.DEEPSEEK_API_KEY;
 if (!apiKey) {
@@ -21,6 +22,15 @@ const ollama = createOllamaClient({
     'hf.co/ai-sage/GigaChat3.1-10B-A1.8B-GGUF:Q4_K_M',
 });
 
-createApp({deepseek, ollama, frontendOrigin: process.env.FRONTEND_ORIGIN}).listen(port, () => {
+const ollamaBaseUrl = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
+const ragStore = new RagStore({
+  path: process.env.RAG_DB_PATH || 'data/rag.sqlite',
+  embed: createOllamaEmbedder({
+    baseUrl: ollamaBaseUrl,
+    model: process.env.RAG_EMBED_MODEL || 'nomic-embed-text',
+  }),
+});
+
+createApp({deepseek, ollama, frontendOrigin: process.env.FRONTEND_ORIGIN, ragStore}).listen(port, () => {
   console.log(`AI comparison proxy is listening on http://localhost:${port}`);
 });

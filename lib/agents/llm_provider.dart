@@ -83,66 +83,66 @@ class BackendLlmProvider implements LlmProvider {
 
     Future<void> run() async {
       try {
-        final httpRequest =
-            http.Request('POST', Uri.parse('$_baseUrl/api/chat'))
-              ..headers.addAll({
-                'Content-Type': 'application/json',
-                'Accept': 'application/x-ndjson',
-              })
-              ..body = jsonEncode({
-                'provider': request.agent.model.providerId,
-                'model': request.agent.model.modelId,
-                'systemPrompt': request.agent.systemPrompt,
-                if (request.agent.mcpServers.isNotEmpty)
-                  'mcpServers': request.agent.mcpServers
-                      .map((server) => server.toJson())
-                      .toList(),
-                'messages': request.messages
-                    .map((message) => {
-                          'role': message.role.name,
-                          'content': message.content,
-                        })
-                    .toList(),
-                if (request.summary.isNotEmpty)
-                  'contextSummary': request.summary,
-                if (request.facts.isNotEmpty) 'contextFacts': request.facts,
-                if (request.workingMemory.isNotEmpty)
-                  'workingMemory': request.workingMemory,
-                if (request.longTermMemory.isNotEmpty)
-                  'longTermMemory': request.longTermMemory,
-                if (!request.userProfile.isEmpty)
-                  'userProfile': request.userProfile.toJson(),
-                if (request.taskState != null)
-                  'taskState': {
-                    'id': request.taskState!.id,
-                    'name': request.taskState!.name,
-                    'description': request.taskState!.description,
-                    if (request.taskStateModel != null) ...{
-                      'modelName': request.taskStateModel!.title,
-                      'states': request.taskStateModel!.states
-                          .map((state) => {
-                                'id': state.id,
-                                'name': state.name,
-                                'description': state.description,
-                              })
-                          .toList(),
-                    },
-                  },
-                if (request.taskStageResults.isNotEmpty)
-                  'taskStageResults': request.taskStageResults
-                      .map((result) => {
-                            'stateName': result.stateName,
-                            'result': result.result,
+        final httpRequest = http.Request(
+            'POST', Uri.parse('$_baseUrl/api/chat'))
+          ..headers.addAll({
+            'Content-Type': 'application/json',
+            'Accept': 'application/x-ndjson',
+          })
+          ..body = jsonEncode({
+            'provider': request.agent.model.providerId,
+            'model': request.agent.model.modelId,
+            'systemPrompt': request.agent.systemPrompt,
+            if (request.agent.ragIds.isNotEmpty) 'ragIds': request.agent.ragIds,
+            if (request.agent.mcpServers.isNotEmpty)
+              'mcpServers': request.agent.mcpServers
+                  .map((server) => server.toJson())
+                  .toList(),
+            'messages': request.messages
+                .map((message) => {
+                      'role': message.role.name,
+                      'content': message.content,
+                    })
+                .toList(),
+            if (request.summary.isNotEmpty) 'contextSummary': request.summary,
+            if (request.facts.isNotEmpty) 'contextFacts': request.facts,
+            if (request.workingMemory.isNotEmpty)
+              'workingMemory': request.workingMemory,
+            if (request.longTermMemory.isNotEmpty)
+              'longTermMemory': request.longTermMemory,
+            if (!request.userProfile.isEmpty)
+              'userProfile': request.userProfile.toJson(),
+            if (request.taskState != null)
+              'taskState': {
+                'id': request.taskState!.id,
+                'name': request.taskState!.name,
+                'description': request.taskState!.description,
+                if (request.taskStateModel != null) ...{
+                  'modelName': request.taskStateModel!.title,
+                  'states': request.taskStateModel!.states
+                      .map((state) => {
+                            'id': state.id,
+                            'name': state.name,
+                            'description': state.description,
                           })
                       .toList(),
-                if (request.invariants.isNotEmpty)
-                  'invariants': request.invariants
-                      .map((item) => {
-                            'name': item.name,
-                            'description': item.description,
-                          })
-                      .toList(),
-              });
+                },
+              },
+            if (request.taskStageResults.isNotEmpty)
+              'taskStageResults': request.taskStageResults
+                  .map((result) => {
+                        'stateName': result.stateName,
+                        'result': result.result,
+                      })
+                  .toList(),
+            if (request.invariants.isNotEmpty)
+              'invariants': request.invariants
+                  .map((item) => {
+                        'name': item.name,
+                        'description': item.description,
+                      })
+                  .toList(),
+          });
         final response = await client.send(httpRequest).timeout(
               const Duration(seconds: 30),
               onTimeout: () => throw const LlmException(
