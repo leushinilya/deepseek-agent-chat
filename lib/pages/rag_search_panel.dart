@@ -25,6 +25,7 @@ class RagSearchPanel extends StatefulWidget {
 
 class _RagSearchPanelState extends State<RagSearchPanel> {
   final _form = GlobalKey<FormState>();
+  late final TextEditingController _prompt;
   late final TextEditingController _candidateK;
   late final TextEditingController _resultK;
   late final TextEditingController _threshold;
@@ -49,6 +50,7 @@ class _RagSearchPanelState extends State<RagSearchPanel> {
   void initState() {
     super.initState();
     final settings = widget.rag['retrievalSettings'] as Map? ?? {};
+    _prompt = TextEditingController(text: settings['prompt'] as String? ?? '');
     _candidateK =
         TextEditingController(text: '${settings['candidateK'] ?? 20}');
     _resultK = TextEditingController(text: '${settings['resultK'] ?? 5}');
@@ -73,6 +75,7 @@ class _RagSearchPanelState extends State<RagSearchPanel> {
 
   @override
   void dispose() {
+    _prompt.dispose();
     _candidateK.dispose();
     _resultK.dispose();
     _threshold.dispose();
@@ -105,6 +108,7 @@ class _RagSearchPanelState extends State<RagSearchPanel> {
   }
 
   Map<String, dynamic> _settings({bool comparison = false}) => {
+        'prompt': _prompt.text.trim(),
         'filterEnabled': _filter,
         'rewriteEnabled': _rewrite,
         'candidateK': int.parse(_candidateK.text),
@@ -218,6 +222,24 @@ class _RagSearchPanelState extends State<RagSearchPanel> {
       key: _form,
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         const Divider(height: 32),
+        TextFormField(
+            key: const Key('ragPrompt'),
+            controller: _prompt,
+            onChanged: _invalidateComparison,
+            enabled: !_busy,
+            minLines: 3,
+            maxLines: 8,
+            maxLength: 10000,
+            decoration: const InputDecoration(
+                labelText: 'Промт RAG',
+                helperText:
+                    'Инструкции для ответов и работы с этой базой документов.',
+                hintText:
+                    'Например: цитируй пункты документа и отвечай на русском.'),
+            validator: (value) => (value?.length ?? 0) > 10000
+                ? 'Не больше 10000 символов'
+                : null),
+        const SizedBox(height: 16),
         Text('Поиск и релевантность',
             style: Theme.of(context).textTheme.titleMedium),
         SwitchListTile(

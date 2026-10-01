@@ -8,7 +8,7 @@ import {UpstreamError} from './deepseek.js';
 import {baseSystemPrompt} from './prompts.js';
 import {browseMcpDirectories, openMcpServer} from './mcp.js';
 import {parseUploadedDocuments, validateRetrievalSettings} from './rag.js';
-import {rewriteRagQuery, ragReferenceMessage} from './rag_pipeline.js';
+import {rewriteRagQuery, ragReferenceMessage, ragPromptMessages} from './rag_pipeline.js';
 
 export const limits = Object.freeze({maxQueryLength: 8000});
 const supportedModels = new Set(['local-gigachat', 'deepseek-v4-flash', 'deepseek-v4-pro']);
@@ -77,6 +77,7 @@ export function createApp({deepseek, ollama, frontendOrigin, openMcp = openMcpSe
           context.searchAvailable = !baseline && canSearchRag(ragStore, context);
           const messages = [
             {role: 'system', content: req.body.systemPrompt || 'Ответь на вопрос по справочным фрагментам. Если данных недостаточно, сообщи об этом. Указывай источники.'},
+            ...ragPromptMessages(context),
             ragReferenceMessage(context), {role: 'user', content: req.body.query},
           ];
           const answer = context.expansionAvailable || context.searchAvailable
@@ -251,6 +252,7 @@ export function createApp({deepseek, ollama, frontendOrigin, openMcp = openMcpSe
       ...req.body.messages.map(({role, content}) => ({role, content: content.trim()})),
     ];
     if (ragContext) {
+      messages.splice(1, 0, ...ragPromptMessages(ragContext));
       ragContext.expansionAvailable = canExpandRag(ragStore, ragContext);
       ragContext.searchAvailable = canSearchRag(ragStore, ragContext);
       messages.splice(messages.findLastIndex(message => message.role === 'user'), 0,

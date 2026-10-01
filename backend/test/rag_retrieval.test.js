@@ -7,7 +7,7 @@ import test from 'node:test';
 
 import {createApp} from '../src/app.js';
 import {RagStore, defaultRetrievalSettings} from '../src/rag.js';
-import {rewriteRagQuery} from '../src/rag_pipeline.js';
+import {rewriteRagQuery, ragPromptMessages} from '../src/rag_pipeline.js';
 
 async function fixture() {
   const directory = mkdtempSync(join(tmpdir(), 'rag-retrieval-'));
@@ -68,7 +68,7 @@ test('multiple RAGs use their own settings and one shared rewrite; settings surv
     const second = store.create('Second', [{name: 'beta.txt', content: 'Beta price: 200'}]);
     store.startIndex(second.id, 'fixed');
     while (store.get(second.id).status === 'indexing') await new Promise(resolve => setTimeout(resolve, 1));
-    const settings = {...defaultRetrievalSettings, rewriteEnabled: false, candidateK: 1, resultK: 1};
+    const settings = {...defaultRetrievalSettings, prompt: 'Use tables', rewriteEnabled: false, candidateK: 1, resultK: 1};
     store.updateSettings(second.id, settings);
     let calls = 0;
     const found = await store.retrieve([rag.id, second.id], 'What is its price?', {
@@ -110,7 +110,8 @@ test('settings API validates limits and comparison uses identical agent model an
   }};
   try {
     await withServer(store, {deepseek}, async base => {
-      for (const invalid of [null, {...defaultRetrievalSettings, candidateK: 0},
+      for (const invalid of [null, {...defaultRetrievalSettings, prompt: 123},
+        {...defaultRetrievalSettings, prompt: 'x'.repeat(10001)}, {...defaultRetrievalSettings, candidateK: 0},
         {...defaultRetrievalSettings, resultK: 21}, {...defaultRetrievalSettings, similarityThreshold: 2},
         {...defaultRetrievalSettings, rewriteEnabled: 'yes'}, {...defaultRetrievalSettings, resultK: 1.5},
         {...defaultRetrievalSettings, neighborRadius: 3},
@@ -119,7 +120,7 @@ test('settings API validates limits and comparison uses identical agent model an
         {...defaultRetrievalSettings, maxContextChars: 999}]) {
         assert.equal((await fetch(`${base}/api/rags/${rag.id}/retrieval`, jsonRequest('PATCH', invalid))).status, 400);
       }
-      const settings = {...defaultRetrievalSettings, similarityThreshold: 0.9,
+      const settings = {...defaultRetrievalSettings, prompt: 'Cite numbered paragraphs', similarityThreshold: 0.9,
         resultK: 2, maxSearchCalls: 0};
       const response = await fetch(`${base}/api/rags/${rag.id}/retrieval`, jsonRequest('PATCH', settings));
       assert.deepEqual((await response.json()).retrievalSettings, settings);
@@ -145,6 +146,8 @@ test('settings API validates limits and comparison uses identical agent model an
       for (const answerCall of [calls[0], calls[2]]) {
         assert.equal(answerCall.messages.at(-1).content, input.query);
         assert.equal(answerCall.messages[0].content, input.systemPrompt);
+        assert.equal(answerCall.messages[1].role, 'system');
+        assert.match(answerCall.messages[1].content, /Cite numbered paragraphs/);
       }
       assert.equal((await fetch(`${base}/api/rags/${rag.id}/compare`, jsonRequest('POST', {...input, provider: 'ollama'}))).status, 400);
     });
@@ -177,7 +180,7 @@ test('Ollama performs rewrite and chat with no irrelevant context when filtering
     async *generateStream(messages) { answered = messages; yield 'Недостаточно данных'; },
   };
   try {
-    store.updateSettings(rag.id, {...defaultRetrievalSettings, similarityThreshold: 0.99,
+    store.updateSettings(rag.id, {...defaultRetrievalSettings, prompt: 'Answer in Russian', similarityThreshold: 0.99,
       maxSearchCalls: 0});
     await withServer(store, {ollama}, async base => {
       const response = await fetch(`${base}/api/chat`, jsonRequest('POST', {
@@ -189,8 +192,10 @@ test('Ollama performs rewrite and chat with no irrelevant context when filtering
       assert.equal(events[0].rewrittenQuery, 'unrelated question');
       assert.equal(events[0].searches[0].selectedCount, 0);
       assert.equal(rewriteCalls, 1);
-      assert.match(answered[1].content, /Релевантных фрагментов не найдено/);
-      assert.doesNotMatch(answered[1].content, /Alpha price|Beta price/);
+      assert.equal(answered[1].role, 'system');
+      assert.match(answered[1].content, /Answer in Russian/);
+      assert.match(answered[2].content, /Релевантных фрагментов не найдено/);
+      assert.doesNotMatch(answered[2].content, /Alpha price|Beta price/);
       assert.equal(answered.at(-1).content, 'Question');
       store.updateSettings(rag.id, {...defaultRetrievalSettings, rewriteEnabled: false,
         filterEnabled: false, maxSearchCalls: 0});
@@ -200,6 +205,7 @@ test('Ollama performs rewrite and chat with no irrelevant context when filtering
       }));
       await second.text();
       assert.equal(rewriteCalls, 1);
+      assert.equal(answered.filter(message => message.role === 'system').length, 1);
     });
   } finally { store.close(); rmSync(directory, {recursive: true, force: true}); }
 });
@@ -257,4 +263,18 @@ test('search respects each index embedding profile and rejects a model change of
       .run(JSON.stringify({model: 'other-model', format: 'plain-v1'}), rag.id);
     await assert.rejects(() => store.search(rag.id, 'Question'), /Модель эмбеддингов изменилась/);
   } finally { store.close(); rmSync(directory, {recursive: true, force: true}); }
+});
+
+test('RAG instructions retain scope across multiple bases and omit empty prompts', () => {
+  const messages = ragPromptMessages({searches: [
+    {ragId: 'a', ragName: 'First'}, {ragId: 'b', ragName: 'Second'},
+    {ragId: 'a', ragName: 'First'}, {ragId: 'c', ragName: 'Empty'},
+  ], settingsByRag: {a: {prompt: 'Use tables'}, b: {prompt: 'Cite sources'}, c: {prompt: '   '}}});
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].role, 'system');
+  assert.match(messages[0].content, /First.*\nUse tables/);
+  assert.match(messages[0].content, /Second.*\nCite sources/);
+  assert.equal(messages[0].content.split('Use tables').length, 2);
+  assert.doesNotMatch(messages[0].content, /Empty/);
+  assert.deepEqual(ragPromptMessages({searches: [], settingsByRag: {}}), []);
 });

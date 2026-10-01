@@ -30,3 +30,13 @@ export function ragReferenceMessage(context) {
       ({rag_id: ragId, rag: ragName, source, title, section, chunk_id: chunkId,
         previous_chunk_id: previousChunkId, next_chunk_id: nextChunkId, content})))};
 }
+
+export function ragPromptMessages(context) {
+  const prompts = context.searches
+    .filter((search, index, all) => all.findIndex(item => item.ragId === search.ragId) === index)
+    .map(({ragId, ragName}) => ({name: ragName, prompt: context.settingsByRag?.[ragId]?.prompt?.trim()}))
+    .filter(({prompt}) => prompt);
+  return prompts.length ? [{role: 'system', content:
+    'Инструкции пользователя для подключённых RAG. Применяй каждую к работе с соответствующей базой документов.\n' +
+    prompts.map(({name, prompt}) => `RAG «${name}»:\n${prompt}`).join('\n\n')}] : [];
+}

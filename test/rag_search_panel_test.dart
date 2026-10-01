@@ -53,9 +53,12 @@ void main() {
       final settings = jsonDecode(request.body) as Map<String, dynamic>;
       requests.add(settings);
       return http.Response(
-          jsonEncode({...rag, 'retrievalSettings': settings}), 200);
+          jsonEncode({...rag, 'retrievalSettings': settings}), 200,
+          headers: {'content-type': 'application/json; charset=utf-8'});
     });
     await tester.pumpWidget(page(client, (value) => saved = value));
+    await tester.enterText(
+        find.byKey(const Key('ragPrompt')), 'Цитируй документы');
     await tester.enterText(find.byKey(const Key('ragCandidateK')), '3');
     await tester.ensureVisible(find.byKey(const Key('ragSaveRetrieval')));
     await tester.tap(find.byKey(const Key('ragSaveRetrieval')));
@@ -86,6 +89,7 @@ void main() {
     await tester.tap(find.byKey(const Key('ragSaveRetrieval')));
     await tester.pumpAndSettle();
     expect(requests.single, {
+      'prompt': 'Цитируй документы',
       'rewriteEnabled': false,
       'filterEnabled': true,
       'candidateK': 3,
@@ -120,6 +124,7 @@ void main() {
         'model': 'deepseek-v4-pro',
         'systemPrompt': 'Use citations',
         'retrievalSettings': {
+          'prompt': '',
           'rewriteEnabled': true,
           'filterEnabled': true,
           'candidateK': 20,

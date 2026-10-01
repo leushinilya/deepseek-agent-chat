@@ -127,12 +127,15 @@ export function createOllamaEmbedder({baseUrl, model = 'nomic-embed-text', fetch
 }
 
 export const defaultRetrievalSettings = Object.freeze({
-  filterEnabled: true, rewriteEnabled: true, similarityThreshold: 0.3,
+  prompt: '', filterEnabled: true, rewriteEnabled: true, similarityThreshold: 0.3,
   candidateK: 20, resultK: 5, neighborRadius: 1,
   maxExpansionCalls: 3, maxSearchCalls: 3, maxContextChars: 20000,
 });
 
 export function validateRetrievalSettings(value) {
+  if (value?.prompt !== undefined && (typeof value.prompt !== 'string' || value.prompt.length > 10000)) {
+    return 'Промт RAG должен быть текстом длиной до 10000 символов.';
+  }
   if (!value || typeof value !== 'object' || Array.isArray(value) ||
       Object.keys(value).some(key => !Object.hasOwn(defaultRetrievalSettings, key)) ||
       typeof value.filterEnabled !== 'boolean' || typeof value.rewriteEnabled !== 'boolean' ||
