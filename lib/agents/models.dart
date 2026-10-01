@@ -164,6 +164,7 @@ class ChatMessage {
     required this.content,
     required this.createdAt,
     this.tokenCount,
+    this.ragSearch,
   });
 
   final String id;
@@ -171,6 +172,7 @@ class ChatMessage {
   final String content;
   final DateTime createdAt;
   final int? tokenCount;
+  final Map<String, dynamic>? ragSearch;
 
   Map<String, Object> toJson() => {
         'id': id,
@@ -178,6 +180,7 @@ class ChatMessage {
         'content': content,
         'createdAt': createdAt.toIso8601String(),
         if (tokenCount != null) 'tokenCount': tokenCount!,
+        if (ragSearch != null) 'ragSearch': ragSearch!,
       };
 
   factory ChatMessage.fromJson(Map<String, dynamic> json) => ChatMessage(
@@ -186,6 +189,7 @@ class ChatMessage {
         content: json['content'] as String,
         createdAt: DateTime.parse(json['createdAt'] as String),
         tokenCount: json['tokenCount'] as int?,
+        ragSearch: (json['ragSearch'] as Map?)?.cast<String, dynamic>(),
       );
 }
 

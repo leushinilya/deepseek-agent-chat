@@ -4,6 +4,7 @@ import {readFile} from 'node:fs/promises';
 import {dirname} from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
 import {PDFParse} from 'pdf-parse';
+import {sectionHeading} from './rag_sections.js';
 
 const documentNamePattern = /^[^/\\\u0000-\u001f]{1,200}\.(txt|md|markdown|csv|json|pdf)$/i;
 
@@ -64,7 +65,7 @@ function splitFixed(text, size = 1000, overlap = 150) {
 
 export function chunkDocument(document, strategy) {
   if (strategy === 'fixed') return splitFixed(document.content)
-    .map(chunk => ({...chunk, section: document.name}));
+    .map(chunk => ({...chunk, section: document.name, sectionIndex: 0}));
   if (strategy !== 'structure') throw new Error('Неизвестная стратегия разбиения.');
   const result = [];
   const sections = [];
@@ -76,32 +77,37 @@ export function chunkDocument(document, strategy) {
     lines = [];
   };
   for (const line of document.content.split(/\r?\n/)) {
-    const markdown = line.match(/^\s{0,3}#{1,6}\s+(.+)$/);
-    const plain = line.match(/^\s*(?:Глава|Раздел|Chapter|Section)\s+[^\n]{1,120}$/i);
-    if (markdown || plain) {
+    const matched = sectionHeading(line);
+    if (matched) {
       flush();
-      heading = (markdown?.[1] ?? line).trim();
+      heading = matched.title;
+      if (matched.includeInContent) lines.push(heading);
     } else {
       lines.push(line);
     }
   }
   flush();
-  for (const section of sections) {
+  for (const [sectionIndex, section] of sections.entries()) {
     for (const part of splitFixed(section.content)) {
-      result.push({...part, section: section.section});
+      result.push({...part, section: section.section, sectionIndex});
     }
   }
   return result;
 }
 
 export function createOllamaEmbedder({baseUrl, model = 'nomic-embed-text', fetchImpl = fetch}) {
-  return async texts => {
+  const profile = Object.freeze({model,
+    format: /^nomic-embed-text(?::|$)/.test(model) ? 'nomic-task-v1' : 'plain-v1'});
+  const embed = async (texts, {task = 'document', profile: requestedProfile = profile} = {}) => {
+    const input = requestedProfile?.format === 'nomic-task-v1'
+      ? texts.map(text => `${task === 'query' ? 'search_query' : 'search_document'}: ${text}`)
+      : texts;
     let response;
     try {
       response = await fetchImpl(`${baseUrl}/api/embed`, {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({model, input: texts}),
+        body: JSON.stringify({model, input}),
         signal: AbortSignal.timeout(120000),
       });
     } catch {
@@ -116,6 +122,30 @@ export function createOllamaEmbedder({baseUrl, model = 'nomic-embed-text', fetch
     }
     return data.embeddings;
   };
+  embed.profile = profile;
+  return embed;
+}
+
+export const defaultRetrievalSettings = Object.freeze({
+  filterEnabled: true, rewriteEnabled: true, similarityThreshold: 0.3,
+  candidateK: 20, resultK: 5, neighborRadius: 1,
+  maxExpansionCalls: 3, maxSearchCalls: 3, maxContextChars: 20000,
+});
+
+export function validateRetrievalSettings(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value) ||
+      Object.keys(value).some(key => !Object.hasOwn(defaultRetrievalSettings, key)) ||
+      typeof value.filterEnabled !== 'boolean' || typeof value.rewriteEnabled !== 'boolean' ||
+      !Number.isFinite(value.similarityThreshold) || value.similarityThreshold < -1 || value.similarityThreshold > 1 ||
+      !Number.isInteger(value.candidateK) || value.candidateK < 1 || value.candidateK > 100 ||
+      !Number.isInteger(value.resultK) || value.resultK < 1 || value.resultK > value.candidateK ||
+      !Number.isInteger(value.neighborRadius) || value.neighborRadius < 0 || value.neighborRadius > 2 ||
+      !Number.isInteger(value.maxExpansionCalls) || value.maxExpansionCalls < 0 || value.maxExpansionCalls > 5 ||
+      !Number.isInteger(value.maxSearchCalls) || value.maxSearchCalls < 0 || value.maxSearchCalls > 5 ||
+      !Number.isInteger(value.maxContextChars) || value.maxContextChars < 1000 || value.maxContextChars > 50000) {
+    return 'Настройки поиска некорректны: top-K от 1 до 100, similarity от −1 до 1, соседи от 0 до 2, догрузки и повторные поиски от 0 до 5, контекст от 1000 до 50000 символов.';
+  }
+  return null;
 }
 
 export class RagStore {
@@ -152,22 +182,96 @@ export class RagStore {
       UPDATE rags SET status = 'error', error = 'Индексация прервана перезапуском сервера.'
       WHERE status = 'indexing';
     `);
+    const columns = this.db.prepare('PRAGMA table_info(rags)').all();
+    for (const name of ['retrieval_settings', 'embedding_profile']) {
+      if (!columns.some(column => column.name === name)) {
+        this.db.exec(`ALTER TABLE rags ADD COLUMN ${name} TEXT`);
+      }
+    }
+    for (const table of ['rag_chunks', 'rag_pending_chunks']) {
+      const columns = this.db.prepare(`PRAGMA table_info(${table})`).all();
+      for (const name of ['previous_chunk_id', 'next_chunk_id']) {
+        if (!columns.some(column => column.name === name)) {
+          this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} TEXT`);
+        }
+      }
+    }
   }
 
   list() {
     return this.db.prepare(`SELECT r.id, r.name, r.status, r.strategy, r.error,
-      r.chunk_count AS chunkCount, r.created_at AS createdAt,
+      r.chunk_count AS chunkCount, r.created_at AS createdAt, r.retrieval_settings, r.embedding_profile,
       COUNT(d.id) AS documentCount FROM rags r
       LEFT JOIN rag_documents d ON d.rag_id = r.id
-      GROUP BY r.id ORDER BY r.created_at DESC`).all();
+      GROUP BY r.id ORDER BY r.created_at DESC`).all().map(row => this._settings(row));
   }
 
   get(id) {
     const rag = this.db.prepare(`SELECT id, name, status, strategy, error,
-      chunk_count AS chunkCount, created_at AS createdAt FROM rags WHERE id = ?`).get(id);
+      chunk_count AS chunkCount, created_at AS createdAt, retrieval_settings, embedding_profile FROM rags WHERE id = ?`).get(id);
     if (!rag) return null;
-    return {...rag, documents: this.db.prepare(
+    return {...this._settings(rag), documents: this.db.prepare(
       'SELECT id, name FROM rag_documents WHERE rag_id = ? ORDER BY rowid').all(id)};
+  }
+
+  _settings({retrieval_settings, embedding_profile, ...rag}) {
+    return {...rag, embeddingProfile: embedding_profile ? JSON.parse(embedding_profile) : null,
+      retrievalSettings: {...defaultRetrievalSettings,
+      ...(retrieval_settings ? JSON.parse(retrieval_settings) : {})}};
+  }
+
+  updateSettings(id, settings) {
+    const error = validateRetrievalSettings(settings);
+    if (error) throw new Error(error);
+    const result = this.db.prepare('UPDATE rags SET retrieval_settings = ? WHERE id = ?')
+      .run(JSON.stringify({...defaultRetrievalSettings, ...settings}), id);
+    return result.changes ? this.get(id) : null;
+  }
+
+  async retrieve(ids, originalQuery, {rewrite, baseline = false,
+    settingsOverrides = new Map()} = {}) {
+    const rags = ids.map(id => this.get(id));
+    if (rags.some(rag => !rag)) throw new Error('Один из выбранных RAG не найден.');
+    if (rags.some(rag => rag.status !== 'indexed')) throw new Error('Один из выбранных RAG ещё не проиндексирован.');
+    for (const rag of rags) {
+      rag.retrievalSettings = settingsOverrides.get(rag.id) ?? rag.retrievalSettings;
+    }
+    const rewrittenQuery = !baseline && rags.some(rag => rag.retrievalSettings.rewriteEnabled)
+      ? await rewrite(originalQuery) : null;
+    const chunks = [];
+    const searches = [];
+    for (const rag of rags) {
+      const settings = rag.retrievalSettings;
+      const query = !baseline && settings.rewriteEnabled ? rewrittenQuery : originalQuery;
+      const found = await this.searchMany([rag.id], query, baseline ? 5 : settings.candidateK);
+      const relevant = !baseline && settings.filterEnabled
+        ? found.chunks.filter(chunk => chunk.score >= settings.similarityThreshold) : found.chunks;
+      const selected = relevant.slice(0, baseline ? 5 : settings.resultK);
+      const delivered = new Set();
+      let usedChars = 0;
+      const add = chunk => {
+        if (!chunk || delivered.has(chunk.chunkId) ||
+            usedChars + chunk.content.length > settings.maxContextChars) return;
+        delivered.add(chunk.chunkId);
+        usedChars += chunk.content.length;
+        chunks.push(chunk);
+      };
+      for (const chunk of selected) {
+        add(chunk);
+        if (!baseline && settings.neighborRadius) {
+          for (const neighbor of this.linkedChunks(rag.id, chunk.chunkId, settings.neighborRadius)) {
+            add(neighbor);
+          }
+        }
+      }
+      searches.push({ragId: rag.id, ragName: rag.name, query,
+        candidateCount: found.chunks.length, relevantCount: relevant.length,
+        selectedCount: selected.length, deliveredCount: delivered.size,
+        candidates: found.chunks.map(chunk => ({...chunk,
+          selected: selected.some(item => item.chunkId === chunk.chunkId)}))});
+    }
+    return {names: rags.map(rag => rag.name), originalQuery, rewrittenQuery, chunks, searches,
+      settingsByRag: Object.fromEntries(rags.map(rag => [rag.id, rag.retrievalSettings]))};
   }
 
   rename(id, name) {
@@ -185,10 +289,31 @@ export class RagStore {
     const total = this.db.prepare('SELECT COUNT(*) AS count FROM rag_chunks WHERE rag_id = ?')
       .get(id).count;
     const chunks = this.db.prepare(`SELECT chunk_id AS chunkId, source, title, section,
-      content, embedding FROM rag_chunks WHERE rag_id = ?
+      content, embedding, previous_chunk_id AS previousChunkId,
+      next_chunk_id AS nextChunkId FROM rag_chunks WHERE rag_id = ?
       ORDER BY source, chunk_id LIMIT ? OFFSET ?`).all(id, limit, offset)
       .map(row => ({...row, embedding: JSON.parse(row.embedding)}));
     return {total, offset, limit, chunks};
+  }
+
+  linkedChunks(ragId, chunkId, radius = 1, direction = 'both') {
+    const row = this.db.prepare(`SELECT chunk_id AS chunkId, rag_id AS ragId,
+      previous_chunk_id AS previousChunkId, next_chunk_id AS nextChunkId,
+      source, title, section, content FROM rag_chunks WHERE rag_id = ? AND chunk_id = ?`);
+    const origin = row.get(ragId, chunkId);
+    if (!origin) return [];
+    const result = [];
+    for (const field of direction === 'both' ? ['previousChunkId', 'nextChunkId'] :
+      [direction === 'before' ? 'previousChunkId' : 'nextChunkId']) {
+      let current = origin;
+      for (let i = 0; i < radius && current[field]; i++) {
+        const neighbor = row.get(ragId, current[field]);
+        if (!neighbor) break;
+        result.push(neighbor);
+        current = neighbor;
+      }
+    }
+    return result;
   }
 
   async search(id, query, limit = 5) {
@@ -202,13 +327,25 @@ export class RagStore {
     if (rags.some(rag => rag.status !== 'indexed')) {
       throw new Error('Один из выбранных RAG ещё не проиндексирован.');
     }
-    const [queryVector] = await this.embed([query.slice(0, 4000)]);
-    const queryNorm = Math.hypot(...queryVector);
-    if (!queryNorm) throw new Error('Не удалось построить вектор запроса.');
+    const queryVectors = new Map();
     const best = [];
     const rows = this.db.prepare(`SELECT chunk_id AS chunkId, source, title, section,
-      content, embedding FROM rag_chunks WHERE rag_id = ?`);
+      content, embedding, previous_chunk_id AS previousChunkId,
+      next_chunk_id AS nextChunkId FROM rag_chunks WHERE rag_id = ?`);
     for (const rag of rags) {
+      const profile = rag.embeddingProfile;
+      if (profile && this.embed.profile &&
+          profile.model.replace(/:latest$/, '') !== this.embed.profile.model.replace(/:latest$/, '')) {
+        throw new Error('Модель эмбеддингов изменилась. Переиндексируйте RAG перед поиском.');
+      }
+      const key = JSON.stringify(profile);
+      if (!queryVectors.has(key)) {
+        const [vector] = await this.embed([query.slice(0, 4000)], {task: 'query', profile});
+        queryVectors.set(key, vector);
+      }
+      const queryVector = queryVectors.get(key);
+      const queryNorm = Math.hypot(...queryVector);
+      if (!queryNorm) throw new Error('Не удалось построить вектор запроса.');
       for (const row of rows.iterate(rag.id)) {
         const vector = JSON.parse(row.embedding);
         if (vector.length !== queryVector.length) {
@@ -222,7 +359,8 @@ export class RagStore {
         if (!Number.isFinite(score)) continue;
         best.push({ragId: rag.id, ragName: rag.name, chunkId: row.chunkId,
           source: row.source, title: row.title, section: row.section,
-          content: row.content, score});
+          content: row.content, score,
+          previousChunkId: row.previousChunkId, nextChunkId: row.nextChunkId});
         best.sort((a, b) => b.score - a.score);
         if (best.length > limit) best.pop();
       }
@@ -276,23 +414,34 @@ export class RagStore {
 
   async index(id, strategy) {
     const runId = randomUUID();
+    const embeddingProfile = this.embed.profile ?? null;
     try {
       const documentIds = this.db.prepare('SELECT id FROM rag_documents WHERE rag_id = ?').all(id);
       const insertPending = this.db.prepare(`INSERT INTO rag_pending_chunks
-        (run_id, chunk_id, rag_id, document_id, source, title, section, content, embedding)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+        (run_id, chunk_id, rag_id, document_id, source, title, section, content, embedding,
+         previous_chunk_id, next_chunk_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
       let chunkCount = 0;
       for (const {id: documentId} of documentIds) {
         const document = this.db.prepare('SELECT id, name, content FROM rag_documents WHERE id = ?').get(documentId);
         const chunks = chunkDocument(document, strategy);
+        const chunkId = index => `${documentId}:${index + 1}`;
         for (let offset = 0; offset < chunks.length; offset += 16) {
           const batch = chunks.slice(offset, offset + 16);
-          const vectors = await this.embed(batch.map(chunk => chunk.content));
+          const vectors = await this.embed(batch.map(chunk => chunk.content),
+            {task: 'document', profile: embeddingProfile});
           if (vectors.length !== batch.length) throw new Error('Ollama вернула не все эмбеддинги.');
-          batch.forEach((chunk, index) => insertPending.run(runId,
-            `${documentId}:${offset + index + 1}`, id, documentId,
+          batch.forEach((chunk, index) => {
+            const position = offset + index;
+            insertPending.run(runId,
+            chunkId(position), id, documentId,
             document.name, document.name, chunk.section,
-            chunk.content, JSON.stringify(vectors[index])));
+            chunk.content, JSON.stringify(vectors[index]),
+            position > 0 && chunks[position - 1].sectionIndex === chunk.sectionIndex
+              ? chunkId(position - 1) : null,
+            position + 1 < chunks.length && chunks[position + 1].sectionIndex === chunk.sectionIndex
+              ? chunkId(position + 1) : null);
+          });
           chunkCount += batch.length;
         }
       }
@@ -301,12 +450,14 @@ export class RagStore {
       try {
         this.db.prepare('DELETE FROM rag_chunks WHERE rag_id = ?').run(id);
         this.db.prepare(`INSERT INTO rag_chunks
-          (chunk_id, rag_id, document_id, source, title, section, content, embedding)
-          SELECT chunk_id, rag_id, document_id, source, title, section, content, embedding
+          (chunk_id, rag_id, document_id, source, title, section, content, embedding,
+           previous_chunk_id, next_chunk_id)
+          SELECT chunk_id, rag_id, document_id, source, title, section, content, embedding,
+                 previous_chunk_id, next_chunk_id
           FROM rag_pending_chunks WHERE run_id = ?`).run(runId);
         this.db.prepare('DELETE FROM rag_pending_chunks WHERE run_id = ?').run(runId);
-        this.db.prepare("UPDATE rags SET status = 'indexed', error = NULL, chunk_count = ? WHERE id = ?")
-          .run(chunkCount, id);
+        this.db.prepare("UPDATE rags SET status = 'indexed', error = NULL, chunk_count = ?, embedding_profile = ? WHERE id = ?")
+          .run(chunkCount, embeddingProfile ? JSON.stringify(embeddingProfile) : null, id);
         this.db.exec('COMMIT');
       } catch (error) {
         this.db.exec('ROLLBACK');

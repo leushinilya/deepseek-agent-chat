@@ -606,7 +606,8 @@ class AgentChatRepository extends ChangeNotifier {
       if (chat == null || task == null || agent == null || project == null) {
         return;
       }
-      appendMessage(chat.id, ChatRole.user, chat.schedulePrompt);
+      final userMessage =
+          appendMessage(chat.id, ChatRole.user, chat.schedulePrompt);
       final contextChat = chatById(chat.id);
       if (contextChat == null) return;
       final operation = provider.send(LlmRequest(
@@ -633,6 +634,9 @@ class AgentChatRepository extends ChangeNotifier {
       final answer = StringBuffer();
       await for (final event in operation.events) {
         if (event is LlmTextDelta) answer.write(event.text);
+        if (event is LlmRagSearch) {
+          updateMessageRagSearch(chat.id, userMessage.id, event.metadata);
+        }
       }
       if (answer.toString().trim().isNotEmpty &&
           _taskTimers.containsKey(chatId)) {
@@ -710,6 +714,31 @@ class AgentChatRepository extends ChangeNotifier {
     memory.replaceMessages(chatId, _chats[index].messages);
     _changed();
     return message;
+  }
+
+  void updateMessageRagSearch(
+      String chatId, String messageId, Map<String, dynamic> metadata) {
+    final index = _chats.indexWhere((chat) => chat.id == chatId);
+    if (index < 0) return;
+    ChatMessage update(ChatMessage message) => message.id != messageId
+        ? message
+        : ChatMessage(
+            id: message.id,
+            role: message.role,
+            content: message.content,
+            createdAt: message.createdAt,
+            tokenCount: message.tokenCount,
+            ragSearch: metadata);
+    final chat = _chats[index];
+    _chats[index] = chat.copyWith(
+      messages: chat.messages.map(update).toList(),
+      branches: chat.branches
+          .map((branch) =>
+              branch.copyWith(messages: branch.messages.map(update).toList()))
+          .toList(),
+    );
+    memory.replaceMessages(chatId, _chats[index].messages);
+    _changed();
   }
 
   void deleteChat(String id) {

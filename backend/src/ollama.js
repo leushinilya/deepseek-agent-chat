@@ -19,15 +19,15 @@ export function createOllamaClient({apiUrl, model, fetchImpl = fetch}) {
       return {message: payload.message,
         usage: {prompt_tokens: payload.prompt_eval_count, completion_tokens: payload.eval_count}};
     },
-    async generate(messages) {
+    async generate(messages, {signal, temperature = 0.7} = {}) {
       const startedAt = Date.now();
       let response;
       try {
         response = await fetchImpl(apiUrl, {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({model, messages, stream: false}),
-          signal: AbortSignal.timeout(180000),
+          body: JSON.stringify({model, messages, options: {temperature}, stream: false}),
+          signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(180000)]) : AbortSignal.timeout(180000),
         });
       } catch (error) {
         const timedOut = error?.name === 'TimeoutError' || error?.name === 'AbortError';

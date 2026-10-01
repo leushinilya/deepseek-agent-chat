@@ -182,6 +182,9 @@ class _ChatPageState extends State<ChatPage> {
         if (event is LlmTextDelta) {
           setState(() => _streamingText += event.text);
           _scrollToEnd();
+        } else if (event is LlmRagSearch) {
+          widget.repository.updateMessageRagSearch(
+              widget.chatId, updatedChat.messages.last.id, event.metadata);
         } else if (event is LlmDone) {
           _completionTokens = event.completionTokens;
           _finish();
@@ -548,6 +551,7 @@ class _ChatPageState extends State<ChatPage> {
                                           message.role,
                                           message.content,
                                           tokenCount: message.tokenCount,
+                                          ragSearch: message.ragSearch,
                                           summarized:
                                               summarized || outsideWindow,
                                           contextLabel: outsideWindow
@@ -1181,6 +1185,7 @@ class _ChatPageState extends State<ChatPage> {
     bool summarized = false,
     String? contextLabel,
     int? tokenCount,
+    Map<String, dynamic>? ragSearch,
   }) {
     final isUser = role == ChatRole.user;
     final displayedTokens = tokenCount ?? estimateTokenCount(content);
@@ -1251,6 +1256,48 @@ class _ChatPageState extends State<ChatPage> {
                           launchUrl(uri, mode: LaunchMode.externalApplication);
                         }
                       },
+                    ),
+                  if (isUser && ragSearch?['rewrittenQuery'] != null)
+                    TextButton.icon(
+                      key: Key('showRewrittenQuery-$content'),
+                      style: TextButton.styleFrom(
+                          foregroundColor: summarized
+                              ? const Color(0xFF344054)
+                              : Colors.white),
+                      icon: const Icon(Icons.manage_search, size: 18),
+                      label: const Text('Поисковый запрос'),
+                      onPressed: () => showDialog<void>(
+                          context: context,
+                          builder: (context) => AlertDialog(
+                                title: const Text('Переформулированный запрос'),
+                                content: SizedBox(
+                                    width: 560,
+                                    child: SingleChildScrollView(
+                                        child: Column(
+                                            mainAxisSize: MainAxisSize.min,
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                          SelectableText(
+                                              ragSearch!['rewrittenQuery']
+                                                  as String),
+                                          const SizedBox(height: 16),
+                                          for (final search
+                                              in (ragSearch['searches']
+                                                      as List? ??
+                                                  []))
+                                            Padding(
+                                                padding: const EdgeInsets.only(
+                                                    top: 8),
+                                                child: Text(
+                                                    '${search['ragName']}: ${search['selectedCount']} из ${search['candidateCount']} фрагментов.\nЗапрос: ${search['query']}')),
+                                        ]))),
+                                actions: [
+                                  TextButton(
+                                      onPressed: () => Navigator.pop(context),
+                                      child: const Text('Закрыть'))
+                                ],
+                              )),
                     ),
                   const SizedBox(height: 7),
                   Text(

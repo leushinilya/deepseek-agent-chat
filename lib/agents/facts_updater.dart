@@ -35,6 +35,8 @@ class FactsUpdater {
       final buffer = StringBuffer();
       _operation = provider.send(LlmRequest(
         agent: agent.copyWith(
+          ragIds: const [],
+          mcpServers: const [],
           systemPrompt: 'Обнови память facts по новому сообщению пользователя. '
               'Храни только устойчивые и важные данные: цель, ограничения, '
               'предпочтения, решения и договорённости. Удали факт, если '

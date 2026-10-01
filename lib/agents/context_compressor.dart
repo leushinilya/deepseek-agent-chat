@@ -28,6 +28,8 @@ class ContextCompressor {
       final buffer = StringBuffer();
       _operation = provider.send(LlmRequest(
         agent: agent.copyWith(
+            ragIds: const [],
+            mcpServers: const [],
             systemPrompt:
                 'Составь компактное резюме переписки для продолжения диалога. '
                 'Объедини предыдущее резюме, если оно есть, с новыми сообщениями. '

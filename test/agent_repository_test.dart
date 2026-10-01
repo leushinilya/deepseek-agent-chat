@@ -18,6 +18,25 @@ void main() {
     await repository.load();
   });
 
+  test('persists rewritten queries with original messages', () async {
+    final agent = repository.createAgent(
+        name: 'Agent', systemPrompt: 'Answer', model: AgentModel.deepseekPro);
+    final project = repository.createProject(title: 'Project');
+    final task = repository.createTask(projectId: project.id, title: 'Task');
+    final chat = repository.createChat(agentId: agent.id, taskId: task.id);
+    final message =
+        repository.appendMessage(chat.id, ChatRole.user, 'Original');
+    repository.updateMessageRagSearch(
+        chat.id, message.id, {'rewrittenQuery': 'Rewritten', 'searches': []});
+    await repository.settled;
+    final restored = AgentChatRepository(store);
+    await restored.load();
+    final saved = restored.chatById(chat.id)!.messages.single;
+    expect(saved.content, 'Original');
+    expect(saved.ragSearch!['rewrittenQuery'], 'Rewritten');
+    expect(ChatMessage.fromJson(saved.toJson()).ragSearch, saved.ragSearch);
+  });
+
   test('creates and edits agents with every supported model', () {
     for (final model in AgentModel.values) {
       final agent = repository.createAgent(

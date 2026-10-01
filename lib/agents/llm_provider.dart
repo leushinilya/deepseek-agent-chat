@@ -42,6 +42,11 @@ class LlmTextDelta extends LlmEvent {
   final String text;
 }
 
+class LlmRagSearch extends LlmEvent {
+  const LlmRagSearch(this.metadata);
+  final Map<String, dynamic> metadata;
+}
+
 class LlmDone extends LlmEvent {
   const LlmDone({this.promptTokens, this.completionTokens});
   final int? promptTokens;
@@ -144,7 +149,7 @@ class BackendLlmProvider implements LlmProvider {
                   .toList(),
           });
         final response = await client.send(httpRequest).timeout(
-              const Duration(seconds: 30),
+              const Duration(minutes: 4),
               onTimeout: () => throw const LlmException(
                 'Сервер не ответил вовремя. Проверьте подключение.',
                 code: 'timeout',
@@ -171,6 +176,8 @@ class BackendLlmProvider implements LlmProvider {
               final text = value['text'];
               if (text is! String) throw const FormatException();
               controller.add(LlmTextDelta(text));
+            case 'rag':
+              controller.add(LlmRagSearch(value));
             case 'done':
               controller.add(LlmDone(
                 promptTokens: value['promptTokens'] as int?,

@@ -55,7 +55,7 @@ export function createDeepSeekClient({apiKey, apiUrl, fetchImpl = fetch}) {
       if (!message) throw new UpstreamError('DeepSeek вернул некорректный ответ.');
       return {message, usage: payload.usage};
     },
-    async generate(messages, {model, temperature = 0.7} = {}) {
+    async generate(messages, {model, temperature = 0.7, signal} = {}) {
       ensureApiKey(apiKey);
       const startedAt = Date.now();
       let response;
@@ -64,7 +64,7 @@ export function createDeepSeekClient({apiKey, apiUrl, fetchImpl = fetch}) {
           method: 'POST',
           headers: {'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}`},
           body: JSON.stringify({model, messages, temperature, stream: false}),
-          signal: AbortSignal.timeout(180000),
+          signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(180000)]) : AbortSignal.timeout(180000),
         });
       } catch (error) {
         const timedOut = error?.name === 'TimeoutError' || error?.name === 'AbortError';

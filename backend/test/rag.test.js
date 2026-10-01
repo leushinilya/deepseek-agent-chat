@@ -157,7 +157,8 @@ test('selected RAG retrieves relevant chunks and supplies them to chat', async (
     {name: 'gamma.txt', content: 'Gamma facts'},
   ]);
   let received;
-  const deepseek = {async *generateStream(messages) {
+  const deepseek = {async generate() { return {answer: 'Alpha facts'}; },
+    async *generateStream(messages) {
     received = messages;
     yield 'Answer';
   }};
@@ -175,6 +176,9 @@ test('selected RAG retrieves relevant chunks and supplies them to chat', async (
     while (store.get(rag.id).status === 'indexing') await new Promise(resolve => setTimeout(resolve, 1));
     store.startIndex(secondRag.id, 'fixed');
     while (store.get(secondRag.id).status === 'indexing') await new Promise(resolve => setTimeout(resolve, 1));
+    for (const id of [rag.id, secondRag.id]) {
+      store.updateSettings(id, {...store.get(id).retrievalSettings, maxSearchCalls: 0});
+    }
     const renamed = await fetch(`${base}/api/rags/${rag.id}`, {method: 'PATCH',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({name: 'Updated knowledge'})});
@@ -197,11 +201,17 @@ test('selected RAG retrieves relevant chunks and supplies them to chat', async (
     const response = await fetch(`${base}/api/chat`, {method: 'POST',
       headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
     assert.equal(response.status, 200);
-    assert.match(await response.text(), /Answer/);
+    const events = (await response.text()).trim().split('\n').map(JSON.parse);
+    assert.equal(events[0].type, 'rag');
+    assert.equal(events[0].originalQuery, 'Tell me about Alpha');
+    assert.equal(events[0].rewrittenQuery, 'Alpha facts');
+    assert.equal(events[0].searches[0].selectedCount, 1);
+    assert.equal(received.at(-1).content, 'Tell me about Alpha');
+    assert.ok(events.some(event => event.text === 'Answer'));
     assert.deepEqual(received.map(message => message.role), ['system', 'assistant', 'user']);
     assert.match(received[1].content, /Alpha facts/);
     assert.match(received[1].content, /alpha\.txt/);
-    assert.match(received[1].content, /Gamma facts/);
+    assert.doesNotMatch(received[1].content, /Gamma facts|Beta facts/);
     assert.match(received[1].content, /More knowledge/);
     assert.doesNotMatch(received[0].content, /Alpha facts/);
     const removed = await fetch(`${base}/api/rags/${rag.id}`, {method: 'DELETE'});

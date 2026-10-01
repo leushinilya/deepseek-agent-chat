@@ -73,6 +73,45 @@ void main() {
     expect(find.textContaining('из 262 144 токенов'), findsOneWidget);
   });
 
+  testWidgets('keeps the original message and opens the saved rewritten query',
+      (tester) async {
+    await tester.pumpWidget(MaterialApp(
+        home: ChatPage(
+            repository: repository, chatId: chat.id, provider: provider)));
+    await tester.enterText(
+        find.byKey(const Key('chatMessageField')), 'А сколько это стоит?');
+    await tester.tap(find.byKey(const Key('sendMessageButton')));
+    await tester.pump();
+    provider.operation.controller.add(const LlmRagSearch({
+      'originalQuery': 'А сколько это стоит?',
+      'rewrittenQuery': 'Стоимость тарифа Pro',
+      'searches': [
+        {
+          'ragName': 'Тарифы',
+          'query': 'Стоимость тарифа Pro',
+          'candidateCount': 20,
+          'selectedCount': 3
+        }
+      ],
+    }));
+    provider.operation.controller.add(const LlmTextDelta('Цена тарифа'));
+    provider.operation.controller.add(const LlmDone());
+    await provider.operation.controller.close();
+    await tester.pumpAndSettle();
+    final userMessage = repository.chatById(chat.id)!.messages.first;
+    expect(userMessage.content, 'А сколько это стоит?');
+    expect(userMessage.ragSearch!['rewrittenQuery'], 'Стоимость тарифа Pro');
+    expect(find.text('Стоимость тарифа Pro'), findsNothing);
+    final button =
+        find.byKey(const Key('showRewrittenQuery-А сколько это стоит?'));
+    await tester.ensureVisible(button);
+    await tester.tap(button);
+    await tester.pumpAndSettle();
+    expect(find.text('Переформулированный запрос'), findsOneWidget);
+    expect(find.text('Стоимость тарифа Pro'), findsOneWidget);
+    expect(find.textContaining('3 из 20'), findsOneWidget);
+  });
+
   testWidgets('shows the current task state', (tester) async {
     await tester.pumpWidget(MaterialApp(
       home:

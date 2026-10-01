@@ -9,6 +9,7 @@ import '../widgets/app_surface.dart';
 import 'rag_document.dart';
 import 'rag_document_picker.dart';
 import 'rag_index_dialog.dart';
+import 'rag_search_panel.dart';
 
 class RagPage extends StatefulWidget {
   const RagPage({this.client, this.repository, super.key});
@@ -319,7 +320,28 @@ class _RagPageState extends State<RagPage> {
           _updateDetailsDialog = update;
           return AlertDialog(
             key: const Key('ragDetailsDialog'),
-            title: const Text('Карточка RAG'),
+            title: Row(children: [
+              Expanded(
+                child: Text(_selected?['name'] as String? ?? 'RAG',
+                    maxLines: 2, overflow: TextOverflow.ellipsis),
+              ),
+              IconButton(
+                key: const Key('ragRenameButton'),
+                tooltip: 'Переименовать RAG',
+                onPressed: _busy || _selected == null ? null : _rename,
+                icon: const Icon(Icons.edit_outlined),
+              ),
+              IconButton(
+                key: const Key('ragDeleteButton'),
+                tooltip: 'Удалить RAG',
+                onPressed: _busy ||
+                        _selected == null ||
+                        _selected?['status'] == 'indexing'
+                    ? null
+                    : () => _delete(_selected!),
+                icon: const Icon(Icons.delete_outline),
+              ),
+            ]),
             content: SizedBox(
               width: 680,
               height: MediaQuery.sizeOf(context).height * 0.68,
@@ -455,26 +477,6 @@ class _RagPageState extends State<RagPage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Row(children: [
-          Expanded(
-            child: Text(rag['name'] as String,
-                style: Theme.of(context).textTheme.titleLarge),
-          ),
-          IconButton(
-            key: const Key('ragRenameButton'),
-            tooltip: 'Переименовать RAG',
-            onPressed: _busy ? null : _rename,
-            icon: const Icon(Icons.edit_outlined),
-          ),
-          IconButton(
-            key: const Key('ragDeleteButton'),
-            tooltip: 'Удалить RAG',
-            onPressed: _busy || rag['status'] == 'indexing'
-                ? null
-                : () => _delete(rag),
-            icon: const Icon(Icons.delete_outline),
-          ),
-        ]),
         if (_error != null)
           Padding(
             padding: const EdgeInsets.only(top: 8),
@@ -540,6 +542,21 @@ class _RagPageState extends State<RagPage> {
               label: const Text('Запустить индексацию'),
             ),
           ],
+        ),
+        RagSearchPanel(
+          key: ValueKey('retrieval-${rag['id']}'),
+          rag: rag,
+          client: _client,
+          baseUrl: _baseUrl,
+          agents: widget.repository?.agents ?? [],
+          onSaved: (saved) => _update(() {
+            _selected = saved;
+            _rags = _rags
+                .map((item) => item['id'] == saved['id']
+                    ? {...item, 'retrievalSettings': saved['retrievalSettings']}
+                    : item)
+                .toList();
+          }),
         ),
         if (rag['status'] == 'indexing')
           const Padding(

@@ -25,6 +25,29 @@ void main() {
     ),
   ];
 
+  test('parses RAG metadata without changing the outgoing user message',
+      () async {
+    final provider = BackendLlmProvider(
+        clientFactory: () => MockClient.streaming((request, _) async {
+              final body = jsonDecode((request as http.Request).body)
+                  as Map<String, dynamic>;
+              expect((body['messages'] as List).last['content'], 'Hello');
+              return http.StreamedResponse(
+                  Stream.value(utf8.encode(
+                      '{"type":"rag","originalQuery":"Hello","rewrittenQuery":"Hello world","searches":[]}\n'
+                      '{"type":"delta","text":"Answer"}\n{"type":"done"}\n')),
+                  200);
+            }));
+    final events = await provider
+        .send(LlmRequest(agent: agent, messages: messages))
+        .events
+        .toList();
+    expect(events.first, isA<LlmRagSearch>());
+    expect((events.first as LlmRagSearch).metadata['rewrittenQuery'],
+        'Hello world');
+    expect(events.whereType<LlmTextDelta>().single.text, 'Answer');
+  });
+
   test('forwards provider, exact model, prompt and streams response', () async {
     late Map<String, dynamic> body;
     final provider = BackendLlmProvider(

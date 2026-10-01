@@ -92,6 +92,12 @@ void main() {
     await tester.tap(find.byKey(const Key('rag-rag-1')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('ragDetailsDialog')), findsOneWidget);
+    expect(
+        find.descendant(
+            of: find.byKey(const Key('ragDetailsDialog')),
+            matching: find.text('Knowledge')),
+        findsOneWidget);
+    expect(find.text('Карточка RAG'), findsNothing);
     await tester.tap(find.byKey(const Key('ragRenameButton')));
     await tester.pumpAndSettle();
     await tester.enterText(find.byKey(const Key('ragRenameField')), 'Updated');
