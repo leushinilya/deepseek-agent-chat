@@ -74,8 +74,8 @@ void main() {
     await tester.enterText(find.byKey(const Key('ragNeighborRadius')), '2');
     await tester.ensureVisible(find.byKey(const Key('ragMaxExpansionCalls')));
     await tester.enterText(find.byKey(const Key('ragMaxExpansionCalls')), '1');
-    await tester.ensureVisible(find.byKey(const Key('ragMaxSearchCalls')));
-    await tester.enterText(find.byKey(const Key('ragMaxSearchCalls')), '2');
+    expect(find.byKey(const Key('ragMaxSearchCalls')), findsNothing);
+    expect(find.byKey(const Key('ragCompareSearchCalls')), findsNothing);
     await tester.ensureVisible(find.byKey(const Key('ragMaxContextChars')));
     await tester.enterText(
         find.byKey(const Key('ragMaxContextChars')), '12000');
@@ -97,7 +97,6 @@ void main() {
       'similarityThreshold': 0.7,
       'neighborRadius': 2,
       'maxExpansionCalls': 1,
-      'maxSearchCalls': 2,
       'maxContextChars': 12000
     });
     expect(saved!['retrievalSettings'], requests.single);
@@ -132,7 +131,6 @@ void main() {
           'similarityThreshold': 0.3,
           'neighborRadius': 0,
           'maxExpansionCalls': 0,
-          'maxSearchCalls': 0,
           'maxContextChars': 20000,
         }
       });
@@ -197,7 +195,6 @@ void main() {
     for (final (key, value) in [
       (const Key('ragCompareNeighborRadius'), '2'),
       (const Key('ragCompareExpansionCalls'), '1'),
-      (const Key('ragCompareSearchCalls'), '2'),
       (const Key('ragCompareContextChars'), '12000'),
     ]) {
       await tester.ensureVisible(find.byKey(key));
@@ -212,7 +209,7 @@ void main() {
     expect(compared!['retrievalSettings'], containsPair('neighborRadius', 2));
     expect(
         compared!['retrievalSettings'], containsPair('maxExpansionCalls', 1));
-    expect(compared!['retrievalSettings'], containsPair('maxSearchCalls', 2));
+    expect(compared!['retrievalSettings'], isNot(contains('maxSearchCalls')));
     expect(
         compared!['retrievalSettings'], containsPair('maxContextChars', 12000));
     client.close();

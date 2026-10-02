@@ -144,7 +144,7 @@ export function validateRetrievalSettings(value) {
       !Number.isInteger(value.resultK) || value.resultK < 1 || value.resultK > value.candidateK ||
       !Number.isInteger(value.neighborRadius) || value.neighborRadius < 0 || value.neighborRadius > 2 ||
       !Number.isInteger(value.maxExpansionCalls) || value.maxExpansionCalls < 0 || value.maxExpansionCalls > 5 ||
-      !Number.isInteger(value.maxSearchCalls) || value.maxSearchCalls < 0 || value.maxSearchCalls > 5 ||
+      (value.maxSearchCalls !== undefined && (!Number.isInteger(value.maxSearchCalls) || value.maxSearchCalls < 0 || value.maxSearchCalls > 5)) ||
       !Number.isInteger(value.maxContextChars) || value.maxContextChars < 1000 || value.maxContextChars > 50000) {
     return 'Настройки поиска некорректны: top-K от 1 до 100, similarity от −1 до 1, соседи от 0 до 2, догрузки и повторные поиски от 0 до 5, контекст от 1000 до 50000 символов.';
   }

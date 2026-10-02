@@ -31,11 +31,9 @@ class _RagSearchPanelState extends State<RagSearchPanel> {
   late final TextEditingController _threshold;
   late final TextEditingController _neighborRadius;
   late final TextEditingController _maxExpansionCalls;
-  late final TextEditingController _maxSearchCalls;
   late final TextEditingController _maxContextChars;
   final _compareNeighborRadius = TextEditingController(text: '0');
   final _compareExpansionCalls = TextEditingController(text: '0');
-  final _compareSearchCalls = TextEditingController(text: '0');
   late final TextEditingController _compareContextChars;
   final _query = TextEditingController();
   late bool _filter;
@@ -60,8 +58,6 @@ class _RagSearchPanelState extends State<RagSearchPanel> {
         TextEditingController(text: '${settings['neighborRadius'] ?? 1}');
     _maxExpansionCalls =
         TextEditingController(text: '${settings['maxExpansionCalls'] ?? 3}');
-    _maxSearchCalls =
-        TextEditingController(text: '${settings['maxSearchCalls'] ?? 3}');
     _maxContextChars =
         TextEditingController(text: '${settings['maxContextChars'] ?? 20000}');
     _compareContextChars =
@@ -81,11 +77,9 @@ class _RagSearchPanelState extends State<RagSearchPanel> {
     _threshold.dispose();
     _neighborRadius.dispose();
     _maxExpansionCalls.dispose();
-    _maxSearchCalls.dispose();
     _maxContextChars.dispose();
     _compareNeighborRadius.dispose();
     _compareExpansionCalls.dispose();
-    _compareSearchCalls.dispose();
     _compareContextChars.dispose();
     _query.dispose();
     super.dispose();
@@ -119,8 +113,6 @@ class _RagSearchPanelState extends State<RagSearchPanel> {
             comparison ? _compareNeighborRadius.text : _neighborRadius.text),
         'maxExpansionCalls': int.parse(
             comparison ? _compareExpansionCalls.text : _maxExpansionCalls.text),
-        'maxSearchCalls': int.parse(
-            comparison ? _compareSearchCalls.text : _maxSearchCalls.text),
         'maxContextChars': int.parse(
             comparison ? _compareContextChars.text : _maxContextChars.text),
       };
@@ -339,18 +331,6 @@ class _RagSearchPanelState extends State<RagSearchPanel> {
             validator: (value) => _validateInteger(value, 0, 5)),
         const SizedBox(height: 16),
         TextFormField(
-            key: const Key('ragMaxSearchCalls'),
-            controller: _maxSearchCalls,
-            onChanged: _invalidateComparison,
-            enabled: !_busy,
-            keyboardType: TextInputType.number,
-            decoration: const InputDecoration(
-                labelText: 'Новых поисков агентом (0–5)',
-                helperText:
-                    'Агент ищет другие фрагменты при уточняющих вопросах.'),
-            validator: (value) => _validateInteger(value, 0, 5)),
-        const SizedBox(height: 16),
-        TextFormField(
             key: const Key('ragMaxContextChars'),
             controller: _maxContextChars,
             onChanged: _invalidateComparison,
@@ -361,6 +341,9 @@ class _RagSearchPanelState extends State<RagSearchPanel> {
                 helperText:
                     'Общий объём найденных и догруженных фрагментов этого RAG.'),
             validator: (value) => _validateInteger(value, 1000, 50000)),
+        const SizedBox(height: 12),
+        const Text(
+            'При каждом новом сообщении выполняется поиск в RAG. Агент также может искать дополнительные сведения по ходу ответа.'),
         const SizedBox(height: 12),
         const Text(
             'Если релевантных фрагментов нет, агент сообщит о недостатке данных. Для связей между чанками перезапустите индексацию.'),
@@ -400,17 +383,6 @@ class _RagSearchPanelState extends State<RagSearchPanel> {
             keyboardType: TextInputType.number,
             decoration: const InputDecoration(
                 labelText: 'Дополнительных догрузок агентом (0–5)'),
-            validator: (value) =>
-                _validatingComparison ? _validateInteger(value, 0, 5) : null),
-        const SizedBox(height: 16),
-        TextFormField(
-            key: const Key('ragCompareSearchCalls'),
-            controller: _compareSearchCalls,
-            onChanged: _invalidateComparison,
-            enabled: !_busy,
-            keyboardType: TextInputType.number,
-            decoration:
-                const InputDecoration(labelText: 'Новых поисков агентом (0–5)'),
             validator: (value) =>
                 _validatingComparison ? _validateInteger(value, 0, 5) : null),
         const SizedBox(height: 16),

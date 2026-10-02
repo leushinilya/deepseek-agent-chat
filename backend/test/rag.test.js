@@ -157,7 +157,8 @@ test('selected RAG retrieves relevant chunks and supplies them to chat', async (
     {name: 'gamma.txt', content: 'Gamma facts'},
   ]);
   let received;
-  const deepseek = {async generate() { return {answer: 'Alpha facts'}; },
+  const deepseek = {async completeWithTools(messages) { received = messages; return {message: {role: 'assistant', content: 'Answer'}}; },
+    async generate() { return {answer: 'Alpha facts'}; },
     async *generateStream(messages) {
     received = messages;
     yield 'Answer';

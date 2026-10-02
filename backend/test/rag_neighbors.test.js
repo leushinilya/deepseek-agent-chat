@@ -51,7 +51,10 @@ test('agent can request one more linked chunk and receives a bounded tool result
   const server = createApp({ragStore: store, deepseek: {
     async generate() { return {answer: 'Baseline', metrics: {}}; },
     async completeWithTools(messages, {tools}) {
-      assert.ok(tools.some(tool => tool.function.name === 'rag_get_neighbor_chunk'));
+      if (!tools.some(tool => tool.function.name === 'rag_get_neighbor_chunk')) {
+        assert.ok(tools.some(tool => tool.function.name === 'rag_search'));
+        return {message: {role: 'assistant', content: 'Baseline'}};
+      }
       const toolResults = messages.filter(message => message.role === 'tool');
       if (toolResults.length) {
         assert.match(JSON.parse(toolResults[0].content).error, /уже полученных/);
@@ -135,8 +138,8 @@ test('agent can search its connected RAG again during a follow-up turn', async (
       const found = JSON.parse(results[1].content);
       assert.equal(found.query, 'TARGET');
       assert.ok(found.chunks.some(chunk => chunk.content.includes('TARGET')));
-      assert.equal(found.remaining_calls, 0);
-      assert.match(JSON.parse(results[2].content).error, /лимит повторных поисков/);
+      assert.equal(JSON.parse(results[2].content).query, 'TARGET again');
+      assert.equal(JSON.parse(results[2].content).error, undefined);
       return {message: {role: 'assistant', content: 'Answer from the new search'}};
     }
     const calls = [
@@ -151,7 +154,7 @@ test('agent can search its connected RAG again during a follow-up turn', async (
   const server = createApp({ragStore: store, deepseek}).listen(0, '127.0.0.1');
   try {
     store.updateSettings(rag.id, {...defaultRetrievalSettings, rewriteEnabled: false,
-      candidateK: 1, resultK: 1, neighborRadius: 0, maxSearchCalls: 1});
+      candidateK: 1, resultK: 1, neighborRadius: 0, maxSearchCalls: 0});
     await new Promise(resolve => server.once('listening', resolve));
     const response = await fetch(`http://127.0.0.1:${server.address().port}/api/chat`, {
       method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -164,8 +167,8 @@ test('agent can search its connected RAG again during a follow-up turn', async (
     });
     assert.equal(response.status, 200);
     const events = (await response.text()).trim().split('\n').map(JSON.parse);
-    assert.equal(events.filter(event => event.type === 'rag').length, 2);
-    assert.equal(events.filter(event => event.type === 'rag').at(-1).searches.length, 2);
+    assert.equal(events.filter(event => event.type === 'rag').length, 3);
+    assert.equal(events.filter(event => event.type === 'rag').at(-1).searches.length, 3);
     assert.ok(events.some(event => event.text === 'Answer from the new search'), JSON.stringify(events));
     assert.equal(completions, 2);
   } finally {

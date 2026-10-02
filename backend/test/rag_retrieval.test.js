@@ -103,7 +103,10 @@ test('existing SQLite databases migrate without losing documents', () => {
 test('settings API validates limits and comparison uses identical agent model and original question', async () => {
   const {store, rag, directory} = await fixture();
   const calls = [];
-  const deepseek = {async generate(messages, options) {
+  const deepseek = {async completeWithTools(messages, options) {
+    const result = await this.generate(messages, {...options, temperature: 0});
+    return {message: {role: 'assistant', content: result.answer}};
+  }, async generate(messages, options) {
     calls.push({messages, options});
     return {answer: messages[0].content.startsWith('Переформулируй') ? 'Alpha price' : '100, alpha.txt',
       metrics: {promptTokens: 10, completionTokens: 4}};
@@ -176,6 +179,7 @@ test('Ollama performs rewrite and chat with no irrelevant context when filtering
   let rewriteCalls = 0;
   let answered;
   const ollama = {
+    async completeWithTools(messages) { answered = messages; return {message: {role: 'assistant', content: 'Недостаточно данных'}}; },
     async generate(messages) { rewriteCalls++; return {answer: 'unrelated question'}; },
     async *generateStream(messages) { answered = messages; yield 'Недостаточно данных'; },
   };
@@ -194,7 +198,7 @@ test('Ollama performs rewrite and chat with no irrelevant context when filtering
       assert.equal(rewriteCalls, 1);
       assert.equal(answered[1].role, 'system');
       assert.match(answered[1].content, /Answer in Russian/);
-      assert.match(answered[2].content, /Релевантных фрагментов не найдено/);
+      assert.match(answered[2].content, /Первый поиск не нашёл релевантных фрагментов/);
       assert.doesNotMatch(answered[2].content, /Alpha price|Beta price/);
       assert.equal(answered.at(-1).content, 'Question');
       store.updateSettings(rag.id, {...defaultRetrievalSettings, rewriteEnabled: false,

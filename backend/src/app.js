@@ -434,16 +434,14 @@ function canExpandRag(ragStore, context) {
   return !!ragStore && !!context?.searches.some(search => {
     const rule = context.settingsByRag?.[search.ragId] ??
       ragStore.get(search.ragId)?.retrievalSettings;
-    return rule?.maxExpansionCalls > 0 && (rule.maxSearchCalls > 0 ||
-      context.chunks.some(chunk => chunk.ragId === search.ragId &&
-        (chunk.previousChunkId || chunk.nextChunkId)));
+    return rule?.maxExpansionCalls > 0;
   });
 }
 
 function canSearchRag(ragStore, context) {
   return !!ragStore && !!context?.searches.some(search =>
-    (context.settingsByRag?.[search.ragId] ??
-      ragStore.get(search.ragId)?.retrievalSettings)?.maxSearchCalls > 0);
+    !!(context.settingsByRag?.[search.ragId] ??
+      ragStore.get(search.ragId)?.retrievalSettings));
 }
 
 function createRagToolSession(ragStore, context, onSearch) {
@@ -453,7 +451,6 @@ function createRagToolSession(ragStore, context, onSearch) {
   const allowed = new Map();
   const usedChars = new Map();
   const expansionCalls = new Map();
-  const searchCalls = new Map();
   for (const chunk of context.chunks) {
     if (!allowed.has(chunk.ragId)) allowed.set(chunk.ragId, new Set());
     allowed.get(chunk.ragId).add(chunk.chunkId);
@@ -489,10 +486,6 @@ function createRagToolSession(ragStore, context, onSearch) {
         if (!rule || typeof query !== 'string' || !query.trim() || query.length > 4000) {
           return {error: 'Укажите подключённый RAG и непустой запрос до 4000 символов.'};
         }
-        if ((searchCalls.get(ragId) ?? 0) >= rule.maxSearchCalls) {
-          return {error: 'Достигнут лимит повторных поисков для этого RAG.'};
-        }
-        searchCalls.set(ragId, (searchCalls.get(ragId) ?? 0) + 1);
         const found = await ragStore.retrieve([ragId], query.trim(), {
           rewrite: async value => value,
           settingsOverrides: new Map([[ragId, rule]]),
@@ -506,8 +499,7 @@ function createRagToolSession(ragStore, context, onSearch) {
         onSearch?.();
         return {rag_id: ragId, query: query.trim(), chunks,
           candidate_count: found.searches[0].candidateCount,
-          relevant_count: found.searches[0].relevantCount,
-          remaining_calls: rule.maxSearchCalls - searchCalls.get(ragId)};
+          relevant_count: found.searches[0].relevantCount};
       }
       if (!rule || !allowed.get(ragId)?.has(chunkId) || !['before', 'after'].includes(direction)) {
         return {error: 'Можно запрашивать только соседей уже полученных фрагментов этого RAG.'};
