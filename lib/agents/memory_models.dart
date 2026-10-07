@@ -71,20 +71,25 @@ class WorkingMemory {
 }
 
 class LongTermMemory {
-  const LongTermMemory({required this.projectId, this.items = const []});
+  const LongTermMemory({required this.projectId, this.content = ''});
 
   final String projectId;
-  final List<MemoryItem> items;
+  final String content;
+
+  List<String> get promptMessages => content.isEmpty ? const [] : [content];
 
   Map<String, Object> toJson() => {
         'projectId': projectId,
-        'items': items.map((item) => item.toJson()).toList(),
+        'content': content,
       };
 
   factory LongTermMemory.fromJson(Map<String, dynamic> json) => LongTermMemory(
         projectId: json['projectId'] as String? ?? json['agentId'] as String,
-        items: (json['items'] as List<dynamic>? ?? const [])
-            .map((value) => MemoryItem.fromJson(value as Map<String, dynamic>))
-            .toList(growable: false),
+        content: json['content'] as String? ??
+            (json['items'] as List<dynamic>? ?? const [])
+                .map((value) =>
+                    (value as Map<String, dynamic>)['content'] as String)
+                .where((content) => content.trim().isNotEmpty)
+                .join('\n\n'),
       );
 }

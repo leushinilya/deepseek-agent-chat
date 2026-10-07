@@ -168,7 +168,7 @@ class _ChatPageState extends State<ChatPage> {
               ? contextChat.facts
               : const {},
           workingMemory: working.content,
-          longTermMemory: longTerm.items.map((item) => item.content).toList(),
+          longTermMemory: longTerm.promptMessages,
           userProfile: widget.repository.userProfile,
           taskState: widget.repository.currentStateForTask(task),
           taskStateModel: widget.repository.stateModelForTask(task),
@@ -337,9 +337,8 @@ class _ChatPageState extends State<ChatPage> {
                   estimateTokenCount(chat.activeSummary) +
                   estimateTokenCount(
                       widget.repository.workingMemory(chat.taskId).content) +
-                  widget.repository.longTermMemory(project.id).items.fold<int>(
-                      0,
-                      (sum, item) => sum + estimateTokenCount(item.content)) +
+                  estimateTokenCount(
+                      widget.repository.longTermMemory(project.id).content) +
                   project.invariants.fold<int>(
                       0,
                       (sum, invariant) =>

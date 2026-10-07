@@ -3,11 +3,13 @@ import 'package:flutter/material.dart';
 import '../agents/models.dart';
 import '../agents/repository.dart';
 import '../widgets/app_surface.dart';
+import 'tasks_page.dart';
 
 class ProjectsPage extends StatelessWidget {
-  const ProjectsPage({required this.repository, super.key});
+  const ProjectsPage({required this.repository, this.onOpenTasks, super.key});
 
   final AgentChatRepository repository;
+  final ValueChanged<String>? onOpenTasks;
 
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
@@ -24,7 +26,7 @@ class ProjectsPage extends StatelessWidget {
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 1100),
                 child: Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 26, 20, 96),
+                  padding: const EdgeInsets.fromLTRB(20, 26, 20, 0),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
@@ -41,6 +43,7 @@ class ProjectsPage extends StatelessWidget {
                       else
                         Expanded(
                           child: ListView.separated(
+                            padding: const EdgeInsets.only(bottom: 96),
                             itemCount: repository.projects.length,
                             separatorBuilder: (_, __) =>
                                 const SizedBox(height: 12),
@@ -73,7 +76,7 @@ class ProjectsPage extends StatelessWidget {
       );
 
   Widget _card(BuildContext context, AgentProject project) {
-    final items = repository.longTermMemory(project.id).items;
+    final memory = repository.longTermMemory(project.id).content;
     final stateModel = repository.stateModelById(project.stateModelId);
     return AppSurface(
       padding: const EdgeInsets.all(18),
@@ -93,18 +96,6 @@ class ProjectsPage extends StatelessWidget {
             ]),
           ),
           IconButton(
-            key: Key('addLongTermMemory-${project.id}'),
-            tooltip: 'Добавить запись долговременной памяти',
-            onPressed: () => _addMemory(context, project),
-            icon: const Icon(Icons.psychology_alt_outlined),
-          ),
-          IconButton(
-            key: Key('addInvariant-${project.id}'),
-            tooltip: 'Добавить инвариант',
-            onPressed: () => _addInvariant(context, project),
-            icon: const Icon(Icons.gpp_maybe_outlined),
-          ),
-          IconButton(
             key: Key('deleteProject-${project.id}'),
             tooltip: 'Удалить проект',
             onPressed: () => _delete(context, project),
@@ -112,88 +103,199 @@ class ProjectsPage extends StatelessWidget {
           ),
         ]),
         const SizedBox(height: 12),
-        DropdownButtonFormField<String>(
-          key: Key('projectStateModel-${project.id}'),
-          initialValue: stateModel?.id,
-          decoration: const InputDecoration(
-            labelText: 'Модель состояний',
-            helperText: 'При смене модели прогресс этапов задач сбрасывается.',
-          ),
-          hint: const Text('Не назначена'),
-          items: repository.stateModels
-              .map((model) => DropdownMenuItem(
-                    value: model.id,
-                    child: Text(model.title),
-                  ))
-              .toList(),
-          onChanged: repository.stateModels.isEmpty
-              ? null
-              : (value) {
-                  if (value != null && value != project.stateModelId) {
-                    repository.assignStateModelToProject(project.id, value);
-                  }
-                },
+        _editableArea(
+          context,
+          title: 'Модель состояний',
+          text: stateModel?.title ?? 'Не назначена',
+          actionKey: Key('projectStateModel-${project.id}'),
+          onPressed: () => _selectStateModel(context, project),
         ),
         const SizedBox(height: 12),
-        Row(children: [
-          const Icon(Icons.gpp_maybe_outlined,
-              size: 18, color: Color(0xFFD92D20)),
-          const SizedBox(width: 8),
-          Text('Инварианты', style: Theme.of(context).textTheme.titleSmall),
-        ]),
-        const SizedBox(height: 6),
-        if (project.invariants.isEmpty)
-          const Text('Запреты для агента не заданы.',
-              style: TextStyle(
-                  color: Color(0xFF667085), fontStyle: FontStyle.italic))
-        else
-          ...project.invariants.map((invariant) => Padding(
-                padding: const EdgeInsets.only(bottom: 6),
-                child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(
-                        child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(invariant.name,
-                                  style: const TextStyle(
-                                      fontWeight: FontWeight.w700)),
-                              Text(invariant.description,
-                                  style: const TextStyle(
-                                      color: Color(0xFF475467))),
-                            ]),
-                      ),
-                      IconButton(
-                        key: Key('deleteInvariant-${invariant.id}'),
-                        tooltip: 'Удалить инвариант',
-                        onPressed: () => repository.deleteProjectInvariant(
-                            project.id, invariant.id),
-                        icon: const Icon(Icons.delete_outline_rounded),
-                      ),
-                    ]),
-              )),
+        _editableArea(
+          context,
+          title: 'Инварианты',
+          text: project.invariants.isEmpty
+              ? 'Запреты для агента не заданы.'
+              : project.invariants
+                  .map((item) => '${item.name}\n${item.description}')
+                  .join('\n\n'),
+          actionKey: Key('editInvariants-${project.id}'),
+          onPressed: () => _editInvariants(context, project),
+        ),
         const SizedBox(height: 12),
-        Text('Долговременная память',
-            style: Theme.of(context).textTheme.titleSmall),
-        const SizedBox(height: 6),
-        if (items.isEmpty)
-          const Text('Долговременная память проекта пуста.',
-              style: TextStyle(
-                  color: Color(0xFF667085), fontStyle: FontStyle.italic))
-        else
-          ...items.map((item) => Row(children: [
-                Expanded(child: Text(item.content)),
-                IconButton(
-                  key: Key('deleteLongTermMemory-${item.id}'),
-                  tooltip: 'Удалить из долговременной памяти',
-                  onPressed: () =>
-                      repository.deleteLongTermMemoryItem(project.id, item.id),
-                  icon: const Icon(Icons.delete_outline_rounded),
+        _editableArea(
+          context,
+          title: 'Долговременная память',
+          text:
+              memory.isEmpty ? 'Долговременная память проекта пуста.' : memory,
+          actionKey: Key('editLongTermMemory-${project.id}'),
+          onPressed: () => _editMemory(context, project),
+        ),
+        const SizedBox(height: 16),
+        FilledButton.icon(
+          key: Key('projectTasks-${project.id}'),
+          onPressed: () {
+            if (onOpenTasks != null) {
+              onOpenTasks!(project.id);
+            } else {
+              Navigator.of(context).push(MaterialPageRoute<void>(
+                builder: (_) => Scaffold(
+                  appBar: AppBar(title: Text('Задачи · ${project.title}')),
+                  body: TasksPage(
+                    repository: repository,
+                    initialProjectId: project.id,
+                  ),
                 ),
-              ])),
+              ));
+            }
+          },
+          icon: const Icon(Icons.task_alt_outlined),
+          label: Text(
+              'Задачи проекта (${repository.taskCountForProject(project.id)})'),
+        ),
       ]),
     );
+  }
+
+  Widget _editableArea(
+    BuildContext context, {
+    required String title,
+    required String text,
+    required Key actionKey,
+    required VoidCallback onPressed,
+  }) =>
+      Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: const Color(0xFFF8FAFC),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: const Color(0xFFE1E6EF)),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title, style: Theme.of(context).textTheme.titleSmall),
+                  const SizedBox(height: 8),
+                  SelectableText(text,
+                      style: const TextStyle(color: Color(0xFF475467))),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            IconButton(
+              key: actionKey,
+              tooltip: 'Редактировать: $title',
+              onPressed: onPressed,
+              icon: const Icon(Icons.edit_outlined),
+            ),
+          ],
+        ),
+      );
+
+  Future<void> _editInvariants(BuildContext context, AgentProject project) =>
+      showDialog<void>(
+        context: context,
+        builder: (context) => AnimatedBuilder(
+          animation: repository,
+          builder: (context, _) {
+            final invariants =
+                repository.projectById(project.id)?.invariants ?? [];
+            return AlertDialog(
+              title: Text('Инварианты · ${project.title}'),
+              content: SizedBox(
+                width: 520,
+                child: SingleChildScrollView(
+                  child: Column(mainAxisSize: MainAxisSize.min, children: [
+                    if (invariants.isEmpty)
+                      const Text('Запреты для агента не заданы.'),
+                    ...invariants.map((item) => ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          title: Text(item.name),
+                          subtitle: Text(item.description),
+                          trailing:
+                              Row(mainAxisSize: MainAxisSize.min, children: [
+                            IconButton(
+                              key: Key('editInvariant-${item.id}'),
+                              tooltip: 'Редактировать инвариант',
+                              icon: const Icon(Icons.edit_outlined),
+                              onPressed: () =>
+                                  _editInvariant(context, project, item),
+                            ),
+                            IconButton(
+                              key: Key('deleteInvariant-${item.id}'),
+                              tooltip: 'Удалить инвариант',
+                              icon: const Icon(Icons.delete_outline_rounded),
+                              onPressed: () => repository
+                                  .deleteProjectInvariant(project.id, item.id),
+                            ),
+                          ]),
+                        )),
+                  ]),
+                ),
+              ),
+              actions: [
+                TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('Готово')),
+                FilledButton.icon(
+                  key: Key('addInvariant-${project.id}'),
+                  onPressed: () => _addInvariant(context, project),
+                  icon: const Icon(Icons.add),
+                  label: const Text('Добавить'),
+                ),
+              ],
+            );
+          },
+        ),
+      );
+
+  Future<void> _editInvariant(BuildContext context, AgentProject project,
+      ProjectInvariant invariant) async {
+    final draft = await showDialog<_InvariantDraft>(
+      context: context,
+      builder: (_) =>
+          _InvariantDialog(projectTitle: project.title, invariant: invariant),
+    );
+    if (draft != null) {
+      repository.updateProjectInvariant(project.id, invariant.id,
+          name: draft.name, description: draft.description);
+    }
+  }
+
+  Future<void> _selectStateModel(
+      BuildContext context, AgentProject project) async {
+    final selected = await showDialog<String>(
+      context: context,
+      builder: (context) => SimpleDialog(
+        title: const Text('Модель состояний'),
+        children: [
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+            child: Text('При смене модели прогресс этапов задач сбрасывается.'),
+          ),
+          if (repository.stateModels.isEmpty)
+            const Padding(
+              padding: EdgeInsets.all(24),
+              child: Text('Сначала создайте модель состояний в настройках.'),
+            ),
+          ...repository.stateModels.map((model) => SimpleDialogOption(
+                onPressed: () => Navigator.pop(context, model.id),
+                child: Row(children: [
+                  Expanded(child: Text(model.title)),
+                  if (model.id == project.stateModelId)
+                    const Icon(Icons.check, size: 18),
+                ]),
+              )),
+        ],
+      ),
+    );
+    if (selected != null && selected != project.stateModelId) {
+      repository.assignStateModelToProject(project.id, selected);
+    }
   }
 
   Future<void> _create(BuildContext context) async {
@@ -210,19 +312,20 @@ class ProjectsPage extends StatelessWidget {
     if (title != null) repository.createProject(title: title);
   }
 
-  Future<void> _addMemory(BuildContext context, AgentProject project) async {
+  Future<void> _editMemory(BuildContext context, AgentProject project) async {
     final value = await showDialog<String>(
       context: context,
       builder: (context) => _ProjectTextDialog(
         title: 'Память · ${project.title}',
-        label: 'Профиль, решение или знание',
+        label: 'Промпт долговременной памяти',
+        initialContent: repository.longTermMemory(project.id).content,
         fieldKey: const Key('projectMemoryField'),
         saveKey: const Key('saveProjectMemoryButton'),
-        saveLabel: 'Добавить',
+        saveLabel: 'Сохранить',
         memory: true,
       ),
     );
-    if (value != null) repository.rememberLongTerm(project.id, value);
+    if (value != null) repository.updateLongTermMemory(project.id, value);
   }
 
   Future<void> _addInvariant(BuildContext context, AgentProject project) async {
@@ -268,16 +371,18 @@ class _InvariantDraft {
 }
 
 class _InvariantDialog extends StatefulWidget {
-  const _InvariantDialog({required this.projectTitle});
+  const _InvariantDialog({required this.projectTitle, this.invariant});
   final String projectTitle;
+  final ProjectInvariant? invariant;
 
   @override
   State<_InvariantDialog> createState() => _InvariantDialogState();
 }
 
 class _InvariantDialogState extends State<_InvariantDialog> {
-  final _name = TextEditingController();
-  final _description = TextEditingController();
+  late final _name = TextEditingController(text: widget.invariant?.name);
+  late final _description =
+      TextEditingController(text: widget.invariant?.description);
 
   @override
   void dispose() {
@@ -326,7 +431,7 @@ class _InvariantDialogState extends State<_InvariantDialog> {
                 Navigator.pop(context, _InvariantDraft(name, description));
               }
             },
-            child: const Text('Добавить'),
+            child: Text(widget.invariant == null ? 'Добавить' : 'Сохранить'),
           ),
         ],
       );
@@ -340,6 +445,7 @@ class _ProjectTextDialog extends StatefulWidget {
     required this.saveKey,
     required this.saveLabel,
     this.memory = false,
+    this.initialContent = '',
   });
 
   final String title;
@@ -348,13 +454,14 @@ class _ProjectTextDialog extends StatefulWidget {
   final Key saveKey;
   final String saveLabel;
   final bool memory;
+  final String initialContent;
 
   @override
   State<_ProjectTextDialog> createState() => _ProjectTextDialogState();
 }
 
 class _ProjectTextDialogState extends State<_ProjectTextDialog> {
-  final _controller = TextEditingController();
+  late final _controller = TextEditingController(text: widget.initialContent);
 
   @override
   void dispose() {
@@ -371,7 +478,7 @@ class _ProjectTextDialogState extends State<_ProjectTextDialog> {
           autofocus: true,
           minLines: widget.memory ? 3 : 1,
           maxLines: widget.memory ? 6 : 1,
-          maxLength: widget.memory ? 4000 : 200,
+          maxLength: widget.memory ? 500000 : 200,
           decoration: InputDecoration(labelText: widget.label),
         ),
         actions: [
@@ -382,7 +489,9 @@ class _ProjectTextDialogState extends State<_ProjectTextDialog> {
             key: widget.saveKey,
             onPressed: () {
               final value = _controller.text.trim();
-              if (value.isNotEmpty) Navigator.pop(context, value);
+              if (widget.memory || value.isNotEmpty) {
+                Navigator.pop(context, value);
+              }
             },
             child: Text(widget.saveLabel),
           ),

@@ -397,7 +397,7 @@ export function validateChatInput(body) {
   }
   if (body.longTermMemory !== undefined) {
     if (!Array.isArray(body.longTermMemory) || body.longTermMemory.length > 100 ||
-        body.longTermMemory.some(item => typeof item !== 'string' || !item.trim() || item.length > 4000)) {
+        body.longTermMemory.some(item => typeof item !== 'string' || !item.trim() || item.length > (body.longTermMemory.length === 1 ? 500000 : 4000))) {
       return 'Долговременная память должна быть массивом до 100 непустых строк.';
     }
   }

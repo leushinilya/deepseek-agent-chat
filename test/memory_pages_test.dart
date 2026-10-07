@@ -144,28 +144,38 @@ void main() {
     expect(stagesY, lessThan(chatsY));
   });
 
-  testWidgets('project adds and deletes long-term memory', (tester) async {
+  testWidgets('project edits and clears a unified long-term prompt',
+      (tester) async {
     await tester
         .pumpWidget(MaterialApp(home: ProjectsPage(repository: repository)));
 
-    await tester.tap(find.byKey(Key('addLongTermMemory-${project.id}')));
+    await tester.tap(find.byKey(Key('editLongTermMemory-${project.id}')));
     await tester.pumpAndSettle();
     await tester.enterText(find.byKey(const Key('projectMemoryField')),
         'Пользователь предпочитает Flutter');
     await tester.tap(find.byKey(const Key('saveProjectMemoryButton')));
     await tester.pumpAndSettle();
 
-    final item = repository.longTermMemory(project.id).items.single;
+    expect(repository.longTermMemory(project.id).content,
+        'Пользователь предпочитает Flutter');
     expect(find.text('Пользователь предпочитает Flutter'), findsOneWidget);
-    await tester.tap(find.byKey(Key('deleteLongTermMemory-${item.id}')));
-    await tester.pump();
-    expect(repository.longTermMemory(project.id).items, isEmpty);
+    await tester.tap(find.byKey(Key('editLongTermMemory-${project.id}')));
+    await tester.pumpAndSettle();
+    final field =
+        tester.widget<TextField>(find.byKey(const Key('projectMemoryField')));
+    expect(field.controller!.text, 'Пользователь предпочитает Flutter');
+    await tester.enterText(find.byKey(const Key('projectMemoryField')), '');
+    await tester.tap(find.byKey(const Key('saveProjectMemoryButton')));
+    await tester.pumpAndSettle();
+    expect(repository.longTermMemory(project.id).content, isEmpty);
   });
 
   testWidgets('project card adds and deletes an invariant', (tester) async {
     await tester
         .pumpWidget(MaterialApp(home: ProjectsPage(repository: repository)));
 
+    await tester.tap(find.byKey(Key('editInvariants-${project.id}')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(Key('addInvariant-${project.id}')));
     await tester.pumpAndSettle();
     await tester.enterText(

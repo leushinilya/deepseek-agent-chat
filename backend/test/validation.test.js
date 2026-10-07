@@ -189,6 +189,8 @@ test('working and long-term memory are validated and forwarded separately', asyn
   assert.equal(validateChatInput(body), null);
   assert.match(validateChatInput({...body, workingMemory: {goal: 'x'}}), /Рабочая память/);
   assert.match(validateChatInput({...body, longTermMemory: ['']}), /Долговременная память/);
+  assert.equal(validateChatInput({...body, longTermMemory: ['x'.repeat(5000)]}), null);
+  assert.match(validateChatInput({...body, longTermMemory: ['x'.repeat(500001)]}), /Долговременная память/);
   let forwarded;
   const deepseek = {async *generateStream(messages) { forwarded = messages; yield 'Answer'; }};
   const server = createApp({deepseek}).listen(0, '127.0.0.1');

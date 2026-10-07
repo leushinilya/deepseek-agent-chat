@@ -48,8 +48,7 @@ void main() {
     expect(jsonDecode(store.values[shortKey]!)['messages'].single['content'],
         'Current message');
     expect(jsonDecode(store.values[workingKey]!)['content'], 'Current goal');
-    expect(jsonDecode(store.values[longKey]!)['items'].single['content'],
-        'Prefers Flutter');
+    expect(jsonDecode(store.values[longKey]!)['content'], 'Prefers Flutter');
   });
 
   test('task memory is shared by its chats and project memory also applies',
@@ -61,8 +60,7 @@ void main() {
 
     expect(repository.workingMemory(secondChat.taskId).content,
         'Shared task memory');
-    expect(repository.longTermMemory(project.id).items.single.content,
-        'Shared profile');
+    expect(repository.longTermMemory(project.id).content, 'Shared profile');
   });
 
   test('different tasks have isolated working memory', () {
@@ -98,8 +96,7 @@ void main() {
     expect(restored.chatById(firstChat.id)!.messages.single.content,
         'Saved dialogue');
     expect(restored.workingMemory(task.id).content, 'Saved task');
-    expect(restored.longTermMemory(project.id).items.single.content,
-        'Saved knowledge');
+    expect(restored.longTermMemory(project.id).content, 'Saved knowledge');
   });
 
   test('migrates legacy chats into required tasks with their working memory',
@@ -134,22 +131,49 @@ void main() {
         'Legacy task context');
   });
 
+  test('migrates long-term items into one prompt and persists replacement',
+      () async {
+    await repository.settled;
+    final key = '${MemoryRepository.longTermPrefix}${project.id}';
+    store.values[key] = jsonEncode({
+      'projectId': project.id,
+      'items': [
+        {'content': 'First preference'},
+        {'content': 'Second decision'},
+      ],
+    });
+    final restored = AgentChatRepository(store);
+    await restored.load();
+    expect(restored.longTermMemory(project.id).content,
+        'First preference\n\nSecond decision');
+    restored.updateLongTermMemory(project.id, 'Replacement prompt');
+    await restored.settled;
+    final reloaded = AgentChatRepository(store);
+    await reloaded.load();
+    expect(reloaded.longTermMemory(project.id).content, 'Replacement prompt');
+    expect(jsonDecode(store.values[key]!).containsKey('items'), isFalse);
+    restored.updateLongTermMemory(project.id, '');
+    await restored.settled;
+    final cleared = AgentChatRepository(store);
+    await cleared.load();
+    expect(cleared.longTermMemory(project.id).promptMessages, isEmpty);
+  });
+
   test('ordinary messages do not implicitly enter durable memories', () {
     repository.appendMessage(firstChat.id, ChatRole.user, 'Do not classify me');
     expect(repository.workingMemory(task.id).content, isEmpty);
-    expect(repository.longTermMemory(project.id).items, isEmpty);
+    expect(repository.longTermMemory(project.id).content, isEmpty);
   });
 
-  test('clears unified working memory and deletes long-term records', () {
+  test('clears unified working and long-term memory', () {
     repository.updateWorkingMemory(task.id, 'Temporary task');
     repository.rememberLongTerm(project.id, 'Outdated preference');
-    final longTermId = repository.longTermMemory(project.id).items.single.id;
 
     repository.updateWorkingMemory(task.id, '');
-    repository.deleteLongTermMemoryItem(project.id, longTermId);
+    repository.updateLongTermMemory(project.id, '');
 
     expect(repository.workingMemory(task.id).content, isEmpty);
-    expect(repository.longTermMemory(project.id).items, isEmpty);
+    expect(repository.longTermMemory(project.id).content, isEmpty);
   });
 }
 

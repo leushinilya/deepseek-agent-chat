@@ -34,7 +34,7 @@ class AgentChatRepository extends ChangeNotifier {
       : this._(store, clock ?? DateTime.now);
 
   AgentChatRepository._(this._store, this._clock)
-      : memory = MemoryRepository(_store, clock: _clock);
+      : memory = MemoryRepository(_store);
 
   static const _storageKey = 'ai_agents_and_chats_v1';
   static const _schemaVersion = 10;
@@ -343,6 +343,35 @@ class AgentChatRepository extends ChangeNotifier {
     return invariant;
   }
 
+  void updateProjectInvariant(
+    String projectId,
+    String invariantId, {
+    required String name,
+    required String description,
+  }) {
+    final index = _projects.indexWhere((project) => project.id == projectId);
+    if (index < 0) throw StateError('Project not found');
+    final project = _projects[index];
+    if (!project.invariants.any((item) => item.id == invariantId)) {
+      throw StateError('Invariant not found');
+    }
+    final value = ProjectInvariant(
+      id: invariantId,
+      name: _required(name, 'Введите название инварианта.'),
+      description: _required(description, 'Введите описание инварианта.'),
+    );
+    if (value.name.length > 200 || value.description.length > 4000) {
+      throw ArgumentError('Название или описание инварианта слишком длинное.');
+    }
+    _projects[index] = project.copyWith(
+      invariants: project.invariants
+          .map((item) => item.id == invariantId ? value : item)
+          .toList(),
+      updatedAt: _clock(),
+    );
+    _changed();
+  }
+
   void deleteProjectInvariant(String projectId, String invariantId) {
     final index = _projects.indexWhere((project) => project.id == projectId);
     if (index < 0) throw StateError('Project not found');
@@ -620,10 +649,7 @@ class AgentChatRepository extends ChangeNotifier {
             ? contextChat.facts
             : const {},
         workingMemory: workingMemory(task.id).content,
-        longTermMemory: longTermMemory(project.id)
-            .items
-            .map((item) => item.content)
-            .toList(),
+        longTermMemory: longTermMemory(project.id).promptMessages,
         userProfile: userProfile,
         taskState: currentStateForTask(task),
         taskStateModel: stateModelForTask(task),
@@ -767,9 +793,9 @@ class AgentChatRepository extends ChangeNotifier {
     notifyListeners();
   }
 
-  void deleteLongTermMemoryItem(String projectId, String itemId) {
+  void updateLongTermMemory(String projectId, String content) {
     if (projectById(projectId) == null) throw StateError('Project not found');
-    memory.deleteLongTermItem(projectId, itemId);
+    memory.saveLongTerm(projectId, content);
     notifyListeners();
   }
 

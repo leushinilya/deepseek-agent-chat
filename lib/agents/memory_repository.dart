@@ -5,20 +5,17 @@ import 'memory_models.dart';
 import 'models.dart';
 
 class MemoryRepository {
-  MemoryRepository(this._store, {required DateTime Function() clock})
-      : _clock = clock;
+  MemoryRepository(this._store);
 
   static const shortTermPrefix = 'memory_short_term_v1_';
   static const workingPrefix = 'memory_working_v1_';
   static const longTermPrefix = 'memory_long_term_v1_';
 
   final KeyValueStore _store;
-  final DateTime Function() _clock;
   final Map<String, ShortTermMemory> _shortTerm = {};
   final Map<String, WorkingMemory> _working = {};
   final Map<String, LongTermMemory> _longTerm = {};
   Future<void> _pendingWrite = Future.value();
-  var _nextId = 0;
 
   Future<void> get settled => _pendingWrite;
 
@@ -84,24 +81,24 @@ class MemoryRepository {
     _write(workingStorageKey(taskId), value.toJson());
   }
 
-  void rememberLongTerm(String projectId, String content) {
-    final current = longTermFor(projectId);
-    final value = LongTermMemory(
-      projectId: projectId,
-      items: [...current.items, _item(content)],
-    );
+  void saveLongTerm(String projectId, String content) {
+    final cleaned = content.trim();
+    if (cleaned.length > 500000) {
+      throw ArgumentError(
+          'Долговременная память не должна превышать 500000 символов.');
+    }
+    final value = LongTermMemory(projectId: projectId, content: cleaned);
     _longTerm[projectId] = value;
     _write(longTermStorageKey(projectId), value.toJson());
   }
 
-  void deleteLongTermItem(String projectId, String itemId) {
-    final current = longTermFor(projectId);
-    final value = LongTermMemory(
-      projectId: projectId,
-      items: current.items.where((item) => item.id != itemId).toList(),
-    );
-    _longTerm[projectId] = value;
-    _write(longTermStorageKey(projectId), value.toJson());
+  void rememberLongTerm(String projectId, String content) {
+    final current = longTermFor(projectId).content;
+    final cleaned = content.trim();
+    if (cleaned.isEmpty) {
+      throw ArgumentError('Запись памяти не должна быть пустой.');
+    }
+    saveLongTerm(projectId, current.isEmpty ? cleaned : '$current\n\n$cleaned');
   }
 
   void clearChat(String chatId) {
@@ -119,22 +116,6 @@ class MemoryRepository {
     _longTerm.remove(projectId);
     _write(longTermStorageKey(projectId),
         LongTermMemory(projectId: projectId).toJson());
-  }
-
-  MemoryItem _item(String content) {
-    final cleaned = content.trim();
-    if (cleaned.isEmpty) {
-      throw ArgumentError('Запись памяти не должна быть пустой.');
-    }
-    if (cleaned.length > 4000) {
-      throw ArgumentError('Запись памяти не должна превышать 4000 символов.');
-    }
-    final now = _clock();
-    return MemoryItem(
-      id: 'memory-${now.microsecondsSinceEpoch}-${_nextId++}',
-      content: cleaned,
-      createdAt: now,
-    );
   }
 
   void _write(String key, Map<String, Object> value) {

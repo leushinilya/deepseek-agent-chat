@@ -6,66 +6,127 @@ import '../agents/repository.dart';
 import '../widgets/app_surface.dart';
 import 'chats_page.dart';
 
-class TasksPage extends StatelessWidget {
-  const TasksPage({required this.repository, super.key});
+class TasksPage extends StatefulWidget {
+  const TasksPage({required this.repository, this.initialProjectId, super.key});
 
   final AgentChatRepository repository;
+  final String? initialProjectId;
+
+  @override
+  State<TasksPage> createState() => _TasksPageState();
+}
+
+class _TasksPageState extends State<TasksPage> {
+  late String? _projectId = widget.initialProjectId;
+
+  AgentChatRepository get repository => widget.repository;
 
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
         animation: repository,
-        builder: (context, _) => Scaffold(
-          floatingActionButton: FloatingActionButton.extended(
-            key: const Key('createTaskButton'),
-            onPressed: () => _createTask(context),
-            icon: const Icon(Icons.add_task_rounded),
-            label: const Text('Новая задача'),
-          ),
-          body: SafeArea(
-            child: Center(
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 1100),
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 26, 20, 96),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Text('Задачи',
-                          style: Theme.of(context).textTheme.headlineMedium),
-                      const SizedBox(height: 4),
-                      const Text(
-                        'Каждая задача принадлежит проекту и хранит рабочую память своих чатов.',
-                        style: TextStyle(color: Color(0xFF667085)),
-                      ),
-                      const SizedBox(height: 22),
-                      if (repository.tasks.isEmpty)
-                        Expanded(child: _empty(context))
-                      else
-                        Expanded(
-                          child: ListView.separated(
-                            itemCount: repository.tasks.length,
-                            separatorBuilder: (_, __) =>
-                                const SizedBox(height: 12),
-                            itemBuilder: (context, index) =>
-                                _taskCard(context, repository.tasks[index]),
-                          ),
+        builder: (context, _) {
+          final projects = repository.projects;
+          final projectId = projects.any((project) => project.id == _projectId)
+              ? _projectId
+              : null;
+          final tasks = repository.tasks
+              .where((task) => projectId == null || task.projectId == projectId)
+              .toList();
+          return Scaffold(
+            floatingActionButton: FloatingActionButton.extended(
+              key: const Key('createTaskButton'),
+              onPressed: () => _createTask(context),
+              icon: const Icon(Icons.add_task_rounded),
+              label: const Text('Новая задача'),
+            ),
+            body: SafeArea(
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 1100),
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 26, 20, 0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text('Задачи',
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .headlineMedium),
+                            ),
+                            const SizedBox(width: 16),
+                            Flexible(
+                              child: ConstrainedBox(
+                                constraints:
+                                    const BoxConstraints(maxWidth: 280),
+                                child: DropdownButtonFormField<String>(
+                                  key: ValueKey(
+                                      'taskProjectFilter-${projectId ?? "all"}'),
+                                  initialValue: projectId ?? '',
+                                  isExpanded: true,
+                                  decoration: const InputDecoration(
+                                      labelText: 'Проект'),
+                                  items: [
+                                    const DropdownMenuItem(
+                                      value: '',
+                                      child: Text('Все проекты'),
+                                    ),
+                                    ...projects
+                                        .map((project) => DropdownMenuItem(
+                                              value: project.id,
+                                              child: Text(project.title,
+                                                  overflow:
+                                                      TextOverflow.ellipsis),
+                                            )),
+                                  ],
+                                  onChanged: (value) => setState(() {
+                                    _projectId = value == '' ? null : value;
+                                  }),
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
-                    ],
+                        const SizedBox(height: 4),
+                        const Text(
+                          'Каждая задача принадлежит проекту и хранит рабочую память своих чатов.',
+                          style: TextStyle(color: Color(0xFF667085)),
+                        ),
+                        const SizedBox(height: 22),
+                        if (tasks.isEmpty)
+                          Expanded(
+                              child:
+                                  _empty(context, filtered: projectId != null))
+                        else
+                          Expanded(
+                            child: ListView.separated(
+                              padding: const EdgeInsets.only(bottom: 96),
+                              itemCount: tasks.length,
+                              separatorBuilder: (_, __) =>
+                                  const SizedBox(height: 12),
+                              itemBuilder: (context, index) =>
+                                  _taskCard(context, tasks[index]),
+                            ),
+                          ),
+                      ],
+                    ),
                   ),
                 ),
               ),
             ),
-          ),
-        ),
+          );
+        },
       );
 
-  Widget _empty(BuildContext context) => Center(
+  Widget _empty(BuildContext context, {bool filtered = false}) => Center(
         child: AppSurface(
           child: Column(mainAxisSize: MainAxisSize.min, children: [
             const Icon(Icons.task_alt_rounded,
                 size: 48, color: Color(0xFF7A8496)),
             const SizedBox(height: 14),
-            Text('Задач пока нет',
+            Text(filtered ? 'В этом проекте пока нет задач' : 'Задач пока нет',
                 style: Theme.of(context).textTheme.titleLarge),
             const SizedBox(height: 6),
             Text(

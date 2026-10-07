@@ -15,13 +15,26 @@ class AppShell extends StatefulWidget {
 
 class _AppShellState extends State<AppShell> {
   var _index = 0;
+  String? _taskProjectId;
+  var _taskNavigationVersion = 0;
 
   @override
   Widget build(BuildContext context) {
     final pages = [
       SettingsPage(repository: widget.repository),
-      ProjectsPage(repository: widget.repository),
-      TasksPage(repository: widget.repository),
+      ProjectsPage(
+        repository: widget.repository,
+        onOpenTasks: (projectId) => setState(() {
+          _taskProjectId = projectId;
+          _taskNavigationVersion++;
+          _index = 2;
+        }),
+      ),
+      TasksPage(
+        key: ValueKey(_taskNavigationVersion),
+        repository: widget.repository,
+        initialProjectId: _taskProjectId,
+      ),
     ];
     return LayoutBuilder(builder: (context, constraints) {
       final wide = constraints.maxWidth >= 760;
