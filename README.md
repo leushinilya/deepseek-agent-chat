@@ -16,6 +16,7 @@ Flutter-приложение объединяет исходный экран с
 DEEPSEEK_API_KEY=your_deepseek_api_key_here
 DEEPSEEK_API_URL=https://api.deepseek.com/chat/completions
 OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_NUM_CTX=32768
 LOCAL_MODEL=hf.co/ai-sage/GigaChat3.1-10B-A1.8B-GGUF:Q4_K_M
 PORT=3000
 FRONTEND_ORIGIN=http://localhost:8080
@@ -166,6 +167,8 @@ FRONTEND_ORIGIN=http://localhost:8080
 Когда у агента есть MCP-сервер, ответы чата формируются после выполнения вызовов
 инструментов. Такие ответы появляются целиком после завершения вызовов, а не
 постепенно по мере генерации.
+
+Размер контекста Ollama задаётся `OLLAMA_NUM_CTX` (по умолчанию 32768 токенов) и передаётся во всех запросах к локальной модели, включая RAG и вызовы инструментов. Значение должно помещать историю, найденные фрагменты и ответ; больший контекст требует больше памяти.
 
 Полный Ollama endpoint можно переопределить совместимой переменной `OLLAMA_API_URL`; обычно достаточно `OLLAMA_BASE_URL`. Адрес Flutter-клиента к backend задаётся через `--dart-define=API_BASE_URL=...`, по умолчанию `http://localhost:3000`.
 

@@ -251,6 +251,9 @@ export function createApp({deepseek, ollama, frontendOrigin, openMcp = openMcpSe
       }] : []),
       ...req.body.messages.map(({role, content}) => ({role, content: content.trim()})),
     ];
+    messages[0].content += ragContext
+      ? `\n\nФактические подключения RAG для этого запроса: ${JSON.stringify(ragContext.searches.map(({ragId, ragName}) => ({rag_id: ragId, name: ragName})))}. Начальный поиск уже выполнен; найденные фрагменты приведены ниже. Используй точные rag_id и chunk_id из контекста, не придумывай идентификаторы. Ошибка вызова инструмента не означает, что RAG не подключён. Если информации недостаточно, сообщи об этом, не утверждая, что база отсутствует.`
+      : '\n\nК этому запросу RAG не подключён. Инструменты поиска по RAG недоступны. Не утверждай, что ты искал в документах или имеешь доступ к RAG.';
     if (ragContext) {
       messages.splice(1, 0, ...ragPromptMessages(ragContext));
       ragContext.expansionAvailable = canExpandRag(ragStore, ragContext);
@@ -470,13 +473,13 @@ function createRagToolSession(ragStore, context, onSearch) {
       name: 'rag_get_neighbor_chunk',
       description: 'Прочитать один соседний чанк того же раздела, когда предоставленного контекста недостаточно. Используйте rag_id и chunk_id только из уже полученных фрагментов.',
       parameters: {type: 'object', required: ['rag_id', 'chunk_id', 'direction'],
-        properties: {rag_id: {type: 'string'}, chunk_id: {type: 'string'},
+        properties: {rag_id: {type: 'string', enum: [...settings.keys()]}, chunk_id: {type: 'string'},
           direction: {type: 'string', enum: ['before', 'after']}}},
     }}, {type: 'function', function: {
       name: 'rag_search',
       description: 'Выполнить новый смысловой поиск по подключённому RAG. Используйте при уточняющем вопросе или если текущих фрагментов недостаточно. Запрос должен быть самостоятельным и содержать нужную тему; используйте только rag_id из доступных RAG.',
       parameters: {type: 'object', required: ['rag_id', 'query'],
-        properties: {rag_id: {type: 'string'}, query: {type: 'string'}}},
+        properties: {rag_id: {type: 'string', enum: [...settings.keys()]}, query: {type: 'string'}}},
     }}],
     async call(name, args) {
       const {rag_id: ragId, chunk_id: chunkId, direction} = args ?? {};
@@ -484,7 +487,8 @@ function createRagToolSession(ragStore, context, onSearch) {
       if (name === 'rag_search') {
         const query = args?.query;
         if (!rule || typeof query !== 'string' || !query.trim() || query.length > 4000) {
-          return {error: 'Укажите подключённый RAG и непустой запрос до 4000 символов.'};
+          return {error: 'Укажите подключённый RAG и непустой запрос до 4000 символов.',
+            connected_rags: [...settings.keys()]};
         }
         const found = await ragStore.retrieve([ragId], query.trim(), {
           rewrite: async value => value,
@@ -495,14 +499,17 @@ function createRagToolSession(ragStore, context, onSearch) {
           section: chunk.section, content: chunk.content,
           previous_chunk_id: chunk.previousChunkId, next_chunk_id: chunk.nextChunkId,
         }));
-        context.searches.push(...found.searches);
+        context.searches.push(...found.searches.map(search => ({...search,
+          deliveredCount: chunks.filter(chunk => chunk.rag_id === search.ragId).length})));
         onSearch?.();
         return {rag_id: ragId, query: query.trim(), chunks,
           candidate_count: found.searches[0].candidateCount,
           relevant_count: found.searches[0].relevantCount};
       }
       if (!rule || !allowed.get(ragId)?.has(chunkId) || !['before', 'after'].includes(direction)) {
-        return {error: 'Можно запрашивать только соседей уже полученных фрагментов этого RAG.'};
+        return {error: 'Можно запрашивать только соседей уже полученных фрагментов этого RAG.',
+          connected_rags: [...settings.keys()],
+          allowed_chunks: Object.fromEntries([...allowed].map(([id, chunks]) => [id, [...chunks]]))};
       }
       if ((expansionCalls.get(ragId) ?? 0) >= rule.maxExpansionCalls) {
         return {error: 'Достигнут лимит догрузок для этого RAG.'};

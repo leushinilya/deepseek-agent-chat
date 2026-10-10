@@ -1,13 +1,13 @@
 import {UpstreamError} from './deepseek.js';
 
-export function createOllamaClient({apiUrl, model, fetchImpl = fetch}) {
+export function createOllamaClient({apiUrl, model, contextSize = 32768, fetchImpl = fetch}) {
   return {
     async completeWithTools(messages, {tools, signal}) {
       let response;
       try {
         response = await fetchImpl(apiUrl, {
           method: 'POST', headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({model, messages, tools, stream: false}),
+          body: JSON.stringify({model, messages, tools, options: {num_ctx: contextSize}, stream: false}),
           signal: signal ?? AbortSignal.timeout(180000),
         });
       } catch {
@@ -26,7 +26,7 @@ export function createOllamaClient({apiUrl, model, fetchImpl = fetch}) {
         response = await fetchImpl(apiUrl, {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({model, messages, options: {temperature}, stream: false}),
+          body: JSON.stringify({model, messages, options: {temperature, num_ctx: contextSize}, stream: false}),
           signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(180000)]) : AbortSignal.timeout(180000),
         });
       } catch (error) {
@@ -59,7 +59,7 @@ export function createOllamaClient({apiUrl, model, fetchImpl = fetch}) {
         const response = await fetchImpl(apiUrl, {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({model, messages, stream: true}),
+          body: JSON.stringify({model, messages, options: {num_ctx: contextSize}, stream: true}),
           signal: timeout.signal,
         });
         if (!response.ok) {

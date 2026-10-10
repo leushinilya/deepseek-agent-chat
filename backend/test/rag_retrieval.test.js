@@ -282,3 +282,47 @@ test('RAG instructions retain scope across multiple bases and omit empty prompts
   assert.doesNotMatch(messages[0].content, /Empty/);
   assert.deepEqual(ragPromptMessages({searches: [], settingsByRag: {}}), []);
 });
+
+test('Ollama receives actual connections and corrections for invented RAG identifiers', async () => {
+  const {store, rag, directory} = await fixture();
+  let calls = 0;
+  const ollama = {async completeWithTools(messages, {tools}) {
+    assert.match(messages[0].content, /Начальный поиск уже выполнен/);
+    assert.ok(messages[0].content.includes(rag.id));
+    for (const tool of tools) assert.deepEqual(tool.function.parameters.properties.rag_id.enum, [rag.id]);
+    if (calls++ === 0) return {message: {role: 'assistant', content: '', tool_calls: [
+      {function: {name: 'rag_search', arguments: {rag_id: 'Knowledge', query: 'Alpha'}}},
+      {function: {name: 'rag_get_neighbor_chunk', arguments: {rag_id: 'Knowledge', chunk_id: 'invented', direction: 'after'}}},
+    ]}};
+    const outputs = messages.filter(message => message.role === 'tool').map(message => JSON.parse(message.content));
+    assert.deepEqual(outputs[0].connected_rags, [rag.id]);
+    assert.deepEqual(outputs[1].connected_rags, [rag.id]);
+    assert.ok(outputs[1].allowed_chunks[rag.id].length > 0);
+    return {message: {role: 'assistant', content: 'Alpha price: 100'}};
+  }};
+  try {
+    store.updateSettings(rag.id, {...defaultRetrievalSettings, rewriteEnabled: false});
+    await withServer(store, {ollama}, async base => {
+      const res = await fetch(`${base}/api/chat`, jsonRequest('POST', {
+        provider: 'ollama', model: 'local-gigachat', systemPrompt: 'Answer', ragIds: [rag.id],
+        messages: [{role: 'user', content: 'Alpha'}],
+      }));
+      const events = (await res.text()).trim().split('\n').map(JSON.parse);
+      assert.ok(events.some(event => event.text === 'Alpha price: 100'));
+      assert.ok(!events.some(event => event.type === 'error'));
+    });
+  } finally { store.close(); rmSync(directory, {recursive: true, force: true}); }
+});
+
+test('chat without RAG tells the model that document search is unavailable', async () => {
+  const ollama = {async *generateStream(messages) {
+    assert.match(messages[0].content, /К этому запросу RAG не подключён/);
+    yield 'Answer';
+  }};
+  await withServer(undefined, {ollama}, async base => {
+    const res = await fetch(`${base}/api/chat`, jsonRequest('POST', {
+      provider: 'ollama', model: 'local-gigachat', systemPrompt: 'Answer', messages: [{role: 'user', content: 'Question'}],
+    }));
+    assert.match(await res.text(), /Answer/);
+  });
+});

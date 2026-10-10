@@ -88,7 +88,8 @@ test('summary is validated and forwarded between system prompt and recent messag
     assert.equal(response.status, 200);
     assert.match(await response.text(), /Answer/);
     assert.deepEqual(forwarded.map(message => message.role), ['system', 'assistant', 'user']);
-    assert.equal(forwarded[0].content, body.systemPrompt);
+    assert.ok(forwarded[0].content.startsWith(body.systemPrompt + '\n\n'));
+    assert.match(forwarded[0].content, /К этому запросу RAG не подключён/);
     assert.match(forwarded[1].content, /Prior facts/);
     assert.equal(forwarded[2].content, 'Recent question');
   } finally {
@@ -382,4 +383,22 @@ test('DeepSeek reports missing key and authorization without exposing secrets', 
     unauthorized.generate([{role: 'user', content: 'query'}], {model: 'deepseek-v4-pro'}),
     (error) => error.code === 'authorization' && !error.message.includes('super-secret'),
   );
+});
+
+test('Ollama context window is passed to generation, streaming, and tool requests', async () => {
+  const requests = [];
+  const client = createOllamaClient({apiUrl: 'http://ollama.test/api/chat', model: 'local', contextSize: 16384,
+    fetchImpl: async (_url, options) => {
+      const body = JSON.parse(options.body);
+      requests.push(body);
+      if (body.stream) return new Response(JSON.stringify({message: {content: 'Answer'}, done: true}) + '\n');
+      return new Response(JSON.stringify({message: {role: 'assistant', content: 'Answer'}}));
+    },
+  });
+  const messages = [{role: 'user', content: 'Question'}];
+  await client.generate(messages);
+  for await (const _event of client.generateStream(messages)) {}
+  await client.completeWithTools(messages, {tools: []});
+  assert.equal(requests.length, 3);
+  assert.ok(requests.every(body => body.options.num_ctx === 16384));
 });

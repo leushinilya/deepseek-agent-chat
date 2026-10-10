@@ -15,7 +15,12 @@ const deepseek = createDeepSeekClient({
   apiKey,
   apiUrl: process.env.DEEPSEEK_API_URL || 'https://api.deepseek.com/chat/completions',
 });
+const ollamaContextSize = Number(process.env.OLLAMA_NUM_CTX || 32768);
+if (!Number.isInteger(ollamaContextSize) || ollamaContextSize <= 0) {
+  throw new Error('OLLAMA_NUM_CTX должен быть положительным целым числом.');
+}
 const ollama = createOllamaClient({
+  contextSize: ollamaContextSize,
   apiUrl: process.env.OLLAMA_API_URL || `${process.env.OLLAMA_BASE_URL || 'http://localhost:11434'}/api/chat`,
   model:
     process.env.LOCAL_MODEL ||

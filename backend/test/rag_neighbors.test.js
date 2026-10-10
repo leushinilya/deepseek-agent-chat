@@ -140,6 +140,7 @@ test('agent can search its connected RAG again during a follow-up turn', async (
       assert.ok(found.chunks.some(chunk => chunk.content.includes('TARGET')));
       assert.equal(JSON.parse(results[2].content).query, 'TARGET again');
       assert.equal(JSON.parse(results[2].content).error, undefined);
+      assert.deepEqual(JSON.parse(results[2].content).chunks, []);
       return {message: {role: 'assistant', content: 'Answer from the new search'}};
     }
     const calls = [
@@ -168,7 +169,11 @@ test('agent can search its connected RAG again during a follow-up turn', async (
     assert.equal(response.status, 200);
     const events = (await response.text()).trim().split('\n').map(JSON.parse);
     assert.equal(events.filter(event => event.type === 'rag').length, 3);
-    assert.equal(events.filter(event => event.type === 'rag').at(-1).searches.length, 3);
+    const searches = events.filter(event => event.type === 'rag').at(-1).searches;
+    assert.equal(searches.length, 3);
+    assert.equal(searches[1].deliveredCount, 1);
+    assert.equal(searches[2].selectedCount, 1);
+    assert.equal(searches[2].deliveredCount, 0);
     assert.ok(events.some(event => event.text === 'Answer from the new search'), JSON.stringify(events));
     assert.equal(completions, 2);
   } finally {

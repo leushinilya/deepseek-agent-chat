@@ -1256,7 +1256,7 @@ class _ChatPageState extends State<ChatPage> {
                         }
                       },
                     ),
-                  if (isUser && ragSearch?['rewrittenQuery'] != null)
+                  if (isUser && ragSearch != null)
                     TextButton.icon(
                       key: Key('showRewrittenQuery-$content'),
                       style: TextButton.styleFrom(
@@ -1268,7 +1268,9 @@ class _ChatPageState extends State<ChatPage> {
                       onPressed: () => showDialog<void>(
                           context: context,
                           builder: (context) => AlertDialog(
-                                title: const Text('Переформулированный запрос'),
+                                title: Text(ragSearch['rewrittenQuery'] != null
+                                    ? 'Переформулированный запрос'
+                                    : 'Поиск по RAG'),
                                 content: SizedBox(
                                     width: 560,
                                     child: SingleChildScrollView(
@@ -1278,8 +1280,9 @@ class _ChatPageState extends State<ChatPage> {
                                                 CrossAxisAlignment.start,
                                             children: [
                                           SelectableText(
-                                              ragSearch!['rewrittenQuery']
-                                                  as String),
+                                              (ragSearch['rewrittenQuery'] ??
+                                                  ragSearch['originalQuery'] ??
+                                                  content) as String),
                                           const SizedBox(height: 16),
                                           for (final search
                                               in (ragSearch['searches']
@@ -1289,7 +1292,7 @@ class _ChatPageState extends State<ChatPage> {
                                                 padding: const EdgeInsets.only(
                                                     top: 8),
                                                 child: Text(
-                                                    '${search['ragName']}: ${search['selectedCount']} из ${search['candidateCount']} фрагментов.\nЗапрос: ${search['query']}')),
+                                                    '${search['ragName']}: отобрано ${search['selectedCount']} из ${search['candidateCount']} фрагментов, передано модели ${search['deliveredCount'] ?? search['selectedCount']}.\nЗапрос: ${search['query']}\n${search['selectedCount'] == 0 ? 'Нет фрагментов, прошедших настройки отбора.' : ''}')),
                                         ]))),
                                 actions: [
                                   TextButton(
