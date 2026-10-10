@@ -3,7 +3,14 @@ enum AgentModel {
     id: 'local-gigachat',
     providerId: 'ollama',
     modelId: 'local-gigachat',
-    title: 'GigaChat 3.1 (локальная)',
+    title: 'GigaChat 3.1 · Q4_K_M (4 бит)',
+    contextWindowTokens: 262144,
+  ),
+  localGigaChatQ8(
+    id: 'local-gigachat-q8',
+    providerId: 'ollama',
+    modelId: 'local-gigachat-q8',
+    title: 'GigaChat 3.1 · Q8_0 (8 бит)',
     contextWindowTokens: 262144,
   ),
   deepseekFlash(
@@ -488,6 +495,9 @@ class AgentChat {
     required this.messages,
     required this.createdAt,
     required this.lastActivityAt,
+    this.temperature = 0.7,
+    this.maxTokens = 4096,
+    this.contextWindow = 32768,
     this.compressionMax = 20,
     this.compressionMin = 6,
     this.contextSummary = '',
@@ -502,6 +512,10 @@ class AgentChat {
     this.scheduleInterval = 1,
     this.scheduleUnit = 'hours',
   });
+
+  final double temperature;
+  final int maxTokens;
+  final int contextWindow;
 
   final String id;
   final String agentId;
@@ -560,6 +574,9 @@ class AgentChat {
   }
 
   AgentChat copyWith({
+    double? temperature,
+    int? maxTokens,
+    int? contextWindow,
     String? title,
     List<ChatMessage>? messages,
     DateTime? lastActivityAt,
@@ -578,6 +595,9 @@ class AgentChat {
     String? scheduleUnit,
   }) =>
       AgentChat(
+        temperature: temperature ?? this.temperature,
+        maxTokens: maxTokens ?? this.maxTokens,
+        contextWindow: contextWindow ?? this.contextWindow,
         id: id,
         agentId: agentId,
         taskId: taskId,
@@ -603,6 +623,9 @@ class AgentChat {
       );
 
   Map<String, Object> toJson({bool includeMessages = true}) => {
+        'temperature': temperature,
+        'maxTokens': maxTokens,
+        'contextWindow': contextWindow,
         'id': id,
         'agentId': agentId,
         'taskId': taskId,
@@ -629,6 +652,9 @@ class AgentChat {
       };
 
   factory AgentChat.fromJson(Map<String, dynamic> json) => AgentChat(
+        temperature: (json['temperature'] as num?)?.toDouble() ?? 0.7,
+        maxTokens: json['maxTokens'] as int? ?? 4096,
+        contextWindow: json['contextWindow'] as int? ?? 32768,
         id: json['id'] as String,
         agentId: json['agentId'] as String,
         taskId: json['taskId'] as String? ?? json['id'] as String,

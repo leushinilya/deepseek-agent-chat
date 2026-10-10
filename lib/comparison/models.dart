@@ -1,5 +1,8 @@
 enum ModelTarget {
-  gigaChat('local-gigachat', 'GigaChat 3.1', 'Локальная модель', false),
+  gigaChat('local-gigachat', 'GigaChat 3.1 · Q4_K_M (4 бит)',
+      'Локальная модель', false),
+  gigaChatQ8('local-gigachat-q8', 'GigaChat 3.1 · Q8_0 (8 бит)',
+      'Локальная модель', false),
   deepseekFlash('deepseek-v4-flash', 'DeepSeek V4 Flash', 'DeepSeek API', true),
   deepseekPro('deepseek-v4-pro', 'DeepSeek V4 Pro', 'DeepSeek API', true);
 

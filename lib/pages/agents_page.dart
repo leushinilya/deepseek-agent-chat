@@ -87,16 +87,16 @@ class AgentsPage extends StatelessWidget {
             width: 46,
             height: 46,
             decoration: BoxDecoration(
-              color: agent.model == AgentModel.localGigaChat
+              color: agent.model.providerId == 'ollama'
                   ? const Color(0xFFEAF8F1)
                   : const Color(0xFFE8EDFF),
               borderRadius: BorderRadius.circular(13),
             ),
             child: Icon(
-              agent.model == AgentModel.localGigaChat
+              agent.model.providerId == 'ollama'
                   ? Icons.computer_rounded
                   : Icons.cloud_outlined,
-              color: agent.model == AgentModel.localGigaChat
+              color: agent.model.providerId == 'ollama'
                   ? const Color(0xFF16794B)
                   : const Color(0xFF3659D9),
             ),

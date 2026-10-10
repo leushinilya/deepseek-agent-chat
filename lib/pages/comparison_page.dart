@@ -355,15 +355,15 @@ class _AnswerCard extends StatelessWidget {
                   width: 38,
                   height: 38,
                   decoration: BoxDecoration(
-                      color: target == ModelTarget.gigaChat
+                      color: !target.isPaid
                           ? const Color(0xFFEAF8F1)
                           : const Color(0xFFE8EDFF),
                       borderRadius: BorderRadius.circular(10)),
                   child: Icon(
-                      target == ModelTarget.gigaChat
+                      !target.isPaid
                           ? Icons.computer_rounded
                           : Icons.cloud_outlined,
-                      color: target == ModelTarget.gigaChat
+                      color: !target.isPaid
                           ? const Color(0xFF16794B)
                           : const Color(0xFF3659D9),
                       size: 20),

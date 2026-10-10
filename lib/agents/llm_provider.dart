@@ -10,6 +10,9 @@ class LlmRequest {
   const LlmRequest({
     required this.agent,
     required this.messages,
+    this.temperature = 0.7,
+    this.maxTokens = 4096,
+    this.contextWindow,
     this.summary = '',
     this.facts = const {},
     this.workingMemory = '',
@@ -20,6 +23,9 @@ class LlmRequest {
     this.taskStageResults = const [],
     this.invariants = const [],
   });
+  final double temperature;
+  final int maxTokens;
+  final int? contextWindow;
   final AiAgent agent;
   final List<ChatMessage> messages;
   final String summary;
@@ -95,6 +101,10 @@ class BackendLlmProvider implements LlmProvider {
             'Accept': 'application/x-ndjson',
           })
           ..body = jsonEncode({
+            'temperature': request.temperature,
+            'maxTokens': request.maxTokens,
+            if (request.contextWindow != null)
+              'contextWindow': request.contextWindow,
             'provider': request.agent.model.providerId,
             'model': request.agent.model.modelId,
             'systemPrompt': request.agent.systemPrompt,

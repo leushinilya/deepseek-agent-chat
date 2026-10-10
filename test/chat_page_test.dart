@@ -40,6 +40,41 @@ void main() {
     provider = _FakeProvider();
   });
 
+  testWidgets('chat settings validate, persist and reach generation request',
+      (tester) async {
+    await tester.pumpWidget(MaterialApp(
+        home: ChatPage(
+            repository: repository, chatId: chat.id, provider: provider)));
+    expect(find.byKey(const Key('contextStrategyDropdown')), findsNothing);
+    await tester.tap(find.byKey(const Key('chatSettingsButton')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('chatTemperatureField')), '3');
+    await tester.tap(find.byKey(const Key('saveChatSettingsButton')));
+    await tester.pump();
+    expect(find.text('Введите число от 0 до 2'), findsOneWidget);
+    expect(repository.chatById(chat.id)!.temperature, 0.7);
+    await tester.enterText(
+        find.byKey(const Key('chatTemperatureField')), '0.2');
+    await tester.enterText(find.byKey(const Key('chatMaxTokensField')), '512');
+    await tester.enterText(
+        find.byKey(const Key('chatContextWindowField')), '8192');
+    await tester.tap(find.byKey(const Key('saveChatSettingsButton')));
+    await tester.pumpAndSettle();
+    final saved = AgentChat.fromJson(repository.chatById(chat.id)!.toJson());
+    expect(saved.temperature, 0.2);
+    expect(saved.maxTokens, 512);
+    expect(saved.contextWindow, 8192);
+    await tester.enterText(find.byKey(const Key('chatMessageField')), 'Привет');
+    await tester.tap(find.byKey(const Key('sendMessageButton')));
+    await tester.pump();
+    expect(provider.requests.single.temperature, 0.2);
+    expect(provider.requests.single.maxTokens, 512);
+    expect(provider.requests.single.contextWindow, 8192);
+    provider.operation.controller.add(const LlmDone());
+    await tester.pumpAndSettle();
+    unawaited(provider.operation.controller.close());
+  });
+
   testWidgets('sends once, renders stream and saves completed answer',
       (tester) async {
     await tester.pumpWidget(MaterialApp(
@@ -70,7 +105,7 @@ void main() {
     expect(find.text('9 токенов'), findsOneWidget);
     expect(find.byKey(const Key('chatTotalTokens')), findsOneWidget);
     expect(find.byKey(const Key('chatTokenProgress')), findsOneWidget);
-    expect(find.textContaining('из 262 144 токенов'), findsOneWidget);
+    expect(find.textContaining('из 32 768 токенов'), findsOneWidget);
   });
 
   testWidgets('keeps the original message and opens the saved rewritten query',
@@ -204,6 +239,10 @@ void main() {
         home: ChatPage(
             repository: repository, chatId: chat.id, provider: provider)));
     expect(find.byKey(const Key('compressionMaxField')), findsNothing);
+    if (find.byKey(const Key('contextStrategyDropdown')).evaluate().isEmpty) {
+      await tester.tap(find.byKey(const Key('chatSettingsButton')));
+      await tester.pumpAndSettle();
+    }
     await tester.tap(find.byKey(const Key('contextStrategyDropdown')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Compression').last);
@@ -216,6 +255,8 @@ void main() {
     expect(find.text('Нужно: 1 ≤ min < max'), findsNWidgets(2));
     await tester.enterText(find.byKey(const Key('compressionMaxField')), '3');
     await tester.pump();
+    await tester.tap(find.text('Закрыть'));
+    await tester.pumpAndSettle();
     repository.appendMessage(chat.id, ChatRole.user, 'Old question');
     repository.appendMessage(chat.id, ChatRole.assistant, 'Old answer');
     await tester.enterText(
@@ -280,6 +321,10 @@ void main() {
           ChatPage(repository: repository, chatId: chat.id, provider: provider),
     ));
 
+    if (find.byKey(const Key('contextStrategyDropdown')).evaluate().isEmpty) {
+      await tester.tap(find.byKey(const Key('chatSettingsButton')));
+      await tester.pumpAndSettle();
+    }
     await tester.tap(find.byKey(const Key('contextStrategyDropdown')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Sliding Window').last);
@@ -291,6 +336,10 @@ void main() {
         find.byKey(const Key('contextWindowSizeField')), '4');
     expect(repository.chatById(chat.id)!.windowSize, 4);
 
+    if (find.byKey(const Key('contextStrategyDropdown')).evaluate().isEmpty) {
+      await tester.tap(find.byKey(const Key('chatSettingsButton')));
+      await tester.pumpAndSettle();
+    }
     await tester.tap(find.byKey(const Key('contextStrategyDropdown')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Branching').last);
@@ -304,6 +353,8 @@ void main() {
 
   testWidgets('sliding window collapses and expands unused history',
       (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1000, 1000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
     for (var i = 0; i < 5; i++) {
       repository.appendMessage(
         chat.id,
@@ -354,6 +405,8 @@ void main() {
 
   testWidgets('selecting sticky facts backfills an existing conversation',
       (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
     repository.appendMessage(chat.id, ChatRole.user, 'Меня зовут Алексей');
     repository.appendMessage(
         chat.id, ChatRole.assistant, 'Приятно познакомиться');
@@ -362,11 +415,17 @@ void main() {
           ChatPage(repository: repository, chatId: chat.id, provider: provider),
     ));
 
+    if (find.byKey(const Key('contextStrategyDropdown')).evaluate().isEmpty) {
+      await tester.tap(find.byKey(const Key('chatSettingsButton')));
+      await tester.pumpAndSettle();
+    }
     await tester.tap(find.byKey(const Key('contextStrategyDropdown')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Sticky Facts').last);
     await tester.pump();
     expect(provider.requests, hasLength(1));
+    await tester.tap(find.text('Закрыть'));
+    await tester.pump(const Duration(milliseconds: 350));
     expect(find.text('Обновляю facts…'), findsOneWidget);
     provider.operation.controller.add(const LlmTextDelta('{"name":"Алексей"}'));
     provider.operation.controller.add(const LlmDone());

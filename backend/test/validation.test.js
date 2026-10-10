@@ -402,3 +402,84 @@ test('Ollama context window is passed to generation, streaming, and tool request
   assert.equal(requests.length, 3);
   assert.ok(requests.every(body => body.options.num_ctx === 16384));
 });
+
+test('chat generation settings reject invalid values', () => {
+  const body = {provider: 'ollama', model: 'local-gigachat', systemPrompt: 'Help',
+    messages: [{role: 'user', content: 'Hello'}], temperature: 0.2, maxTokens: 512, contextWindow: 8192};
+  assert.equal(validateChatInput(body), null);
+  for (const settings of [{temperature: -1}, {temperature: 3}, {temperature: '0.2'},
+    {maxTokens: 0}, {maxTokens: 1.5}, {contextWindow: 0}, {contextWindow: 128}]) {
+    assert.ok(validateChatInput({...body, ...settings}));
+  }
+});
+
+test('generation settings reach Ollama for streamed replies and tools', async () => {
+  const bodies = [];
+  const client = createOllamaClient({apiUrl: 'http://unused', model: 'local', contextSize: 32768,
+    fetchImpl: async (_, request) => {
+      const body = JSON.parse(request.body); bodies.push(body);
+      return body.stream
+        ? new Response(JSON.stringify({message: {content: 'Hello'}, done: true}) + '\n')
+        : new Response(JSON.stringify({message: {content: 'Hello'}}));
+    }});
+  const settings = {temperature: 0.2, maxTokens: 512, contextWindow: 8192};
+  for await (const _ of client.generateStream([], settings)) {}
+  await client.completeWithTools([], {...settings, tools: []});
+  for (const body of bodies) assert.deepEqual(body.options, {temperature: 0.2, num_predict: 512, num_ctx: 8192});
+});
+
+test('generation settings reach DeepSeek for streamed replies and tools', async () => {
+  const bodies = [];
+  const client = createDeepSeekClient({apiKey: 'test', apiUrl: 'http://unused',
+    fetchImpl: async (_, request) => {
+      const body = JSON.parse(request.body); bodies.push(body);
+      return body.stream ? new Response('data: [DONE]\n')
+        : new Response(JSON.stringify({choices: [{message: {content: 'Hello'}}]}));
+    }});
+  const settings = {model: 'deepseek-v4-flash', temperature: 0.2, maxTokens: 512};
+  for await (const _ of client.generateStream([], settings)) {}
+  await client.completeWithTools([], {...settings, tools: []});
+  for (const body of bodies) {
+    assert.equal(body.temperature, 0.2);
+    assert.equal(body.max_tokens, 512);
+  }
+});
+
+test('both local quantizations validate and route to their own Ollama model', async () => {
+  const bodies = [];
+  const client = createOllamaClient({apiUrl: 'http://unused', model: 'q4-tag',
+    models: {'local-gigachat': 'q4-tag', 'local-gigachat-q8': 'q8-tag'},
+    fetchImpl: async (_, request) => {
+      const body = JSON.parse(request.body); bodies.push(body);
+      return body.stream ? new Response(JSON.stringify({message: {content: 'Hello'}, done: true}) + '\n')
+        : new Response(JSON.stringify({message: {content: 'Hello'}}));
+    }});
+  for (const model of ['local-gigachat', 'local-gigachat-q8']) {
+    const body = {provider: 'ollama', model, systemPrompt: 'Help', messages: [{role: 'user', content: 'Hello'}]};
+    assert.equal(validateChatInput(body), null);
+    assert.equal(validateComparisonInput({model, query: 'Hello'}), null);
+    assert.ok(validateChatInput({...body, provider: 'deepseek'}));
+    await client.generate([], {model});
+    for await (const _ of client.generateStream([], {model})) {}
+    await client.completeWithTools([], {model, tools: []});
+  }
+  assert.deepEqual(bodies.map(body => body.model), ['q4-tag', 'q4-tag', 'q4-tag', 'q8-tag', 'q8-tag', 'q8-tag']);
+});
+
+test('Q8 selection is forwarded by chat and comparison routes', async () => {
+  const calls = [];
+  const ollama = {async *generateStream(messages, options) {calls.push(options.model); yield 'Hello';},
+    async generate(messages, options) {calls.push(options.model); return {answer: 'Hello', metrics: {}};}};
+  const server = createApp({ollama}).listen(0, '127.0.0.1');
+  try {
+    await new Promise(resolve => server.once('listening', resolve));
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const post = async (path, body) => {
+      const response = await fetch(base + path, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+      assert.equal(response.status, 200); await response.text();
+    };
+    await post('/api/chat', {provider: 'ollama', model: 'local-gigachat-q8', systemPrompt: 'Help', messages: [{role: 'user', content: 'Hello'}]});
+    await post('/api/compare', {model: 'local-gigachat-q8', query: 'Hello'});
+    assert.deepEqual(calls, ['local-gigachat-q8', 'local-gigachat-q8']);
+  } finally {await new Promise(resolve => server.close(resolve));}
+});

@@ -642,6 +642,9 @@ class AgentChatRepository extends ChangeNotifier {
       final operation = provider.send(LlmRequest(
         agent: agent,
         messages: contextChat.contextMessages,
+        temperature: contextChat.temperature,
+        maxTokens: contextChat.maxTokens,
+        contextWindow: contextChat.contextWindow,
         summary: contextChat.contextStrategy == ContextStrategy.compression
             ? contextChat.contextSummary
             : '',
@@ -821,6 +824,31 @@ class AgentChatRepository extends ChangeNotifier {
       compressionMax: max,
       compressionMin: min,
     );
+    _changed();
+  }
+
+  void updateChatGenerationSettings(
+    String chatId, {
+    required double temperature,
+    required int maxTokens,
+    required int contextWindow,
+  }) {
+    if (!temperature.isFinite ||
+        temperature < 0 ||
+        temperature > 2 ||
+        maxTokens < 1 ||
+        maxTokens > 65536 ||
+        contextWindow < 128 ||
+        contextWindow > 1000000 ||
+        maxTokens >= contextWindow) {
+      throw ArgumentError('Некорректные параметры генерации.');
+    }
+    final index = _chats.indexWhere((chat) => chat.id == chatId);
+    if (index < 0) throw StateError('Chat not found');
+    _chats[index] = _chats[index].copyWith(
+        temperature: temperature,
+        maxTokens: maxTokens,
+        contextWindow: contextWindow);
     _changed();
   }
 

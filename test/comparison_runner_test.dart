@@ -6,7 +6,7 @@ import 'package:deepseek_agent_chat/comparison/models.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  test('starts all three models in parallel', () async {
+  test('starts all selected models in parallel', () async {
     final gateway = _FakeGateway();
     final updates = <ModelUpdate>[];
     final runner = ComparisonRunner(() => gateway);
@@ -36,7 +36,8 @@ void main() {
     await running;
 
     expect(updates.where((item) => item.error == 'model failed'), hasLength(1));
-    expect(updates.where((item) => item.value != null), hasLength(2));
+    expect(updates.where((item) => item.value != null),
+        hasLength(ModelTarget.values.length - 1));
   });
 
   test('a new run closes the old gateway and ignores stale results', () async {
@@ -55,7 +56,7 @@ void main() {
     second.completeSuccessfully(prefix: 'new');
     await Future.wait([firstRun, secondRun]);
 
-    expect(updates, hasLength(3));
+    expect(updates, hasLength(ModelTarget.values.length));
     expect(
         updates.where((item) => item.value!.answer.contains('old')), isEmpty);
   });

@@ -11,7 +11,8 @@ import {parseUploadedDocuments, validateRetrievalSettings} from './rag.js';
 import {rewriteRagQuery, ragReferenceMessage, ragPromptMessages} from './rag_pipeline.js';
 
 export const limits = Object.freeze({maxQueryLength: 8000});
-const supportedModels = new Set(['local-gigachat', 'deepseek-v4-flash', 'deepseek-v4-pro']);
+const localModels = new Set(['local-gigachat', 'local-gigachat-q8']);
+const supportedModels = new Set([...localModels, 'deepseek-v4-flash', 'deepseek-v4-pro']);
 
 export function createApp({deepseek, ollama, frontendOrigin, openMcp = openMcpServer, ragStore}) {
   const app = express();
@@ -46,7 +47,7 @@ export function createApp({deepseek, ollama, frontendOrigin, openMcp = openMcpSe
     app.post('/api/rags/:id/compare', async (req, res) => {
       const error = validateComparisonInput(req.body);
       if (error) return res.status(400).json({error});
-      if ((req.body.model === 'local-gigachat' ? 'ollama' : 'deepseek') !== req.body.provider) {
+      if ((localModels.has(req.body.model) ? 'ollama' : 'deepseek') !== req.body.provider) {
         return res.status(400).json({error: 'Провайдер не соответствует модели.'});
       }
       if (typeof req.body.systemPrompt !== 'string' || req.body.systemPrompt.length > 16000) {
@@ -184,8 +185,8 @@ export function createApp({deepseek, ollama, frontendOrigin, openMcp = openMcpSe
       {role: 'user', content: query},
     ];
     try {
-      const result = req.body.model === 'local-gigachat'
-        ? await ollama.generate(messages)
+      const result = localModels.has(req.body.model)
+        ? await ollama.generate(messages, {model: req.body.model})
         : await deepseek.generate(messages, {model: req.body.model});
       return res.json(result);
     } catch (error) {
@@ -277,8 +278,8 @@ export function createApp({deepseek, ollama, frontendOrigin, openMcp = openMcpSe
         return res.end();
       }
       const stream = req.body.provider === 'ollama'
-        ? ollama.generateStream(messages, {signal: controller.signal})
-        : deepseek.generateStream(messages, {model: req.body.model, signal: controller.signal});
+        ? ollama.generateStream(messages, {model: req.body.model, signal: controller.signal, temperature: req.body.temperature, maxTokens: req.body.maxTokens, contextWindow: req.body.contextWindow})
+        : deepseek.generateStream(messages, {model: req.body.model, signal: controller.signal, temperature: req.body.temperature, maxTokens: req.body.maxTokens});
       let usage = null;
       for await (const event of stream) {
         if (typeof event === 'string') {
@@ -325,6 +326,18 @@ export function validateComparisonInput(body) {
 
 export function validateChatInput(body) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return 'Тело запроса должно быть JSON-объектом.';
+  if (body.temperature !== undefined && (!Number.isFinite(body.temperature) || body.temperature < 0 || body.temperature > 2)) {
+    return 'Температура должна быть от 0 до 2.';
+  }
+  if (body.maxTokens !== undefined && (!Number.isInteger(body.maxTokens) || body.maxTokens < 1 || body.maxTokens > 65536)) {
+    return 'Max tokens должен быть от 1 до 65536.';
+  }
+  if (body.contextWindow !== undefined && (!Number.isInteger(body.contextWindow) || body.contextWindow < 128 || body.contextWindow > 1000000)) {
+    return 'Context window должен быть от 128 до 1000000.';
+  }
+  if (body.provider === 'ollama' && body.maxTokens !== undefined && body.contextWindow !== undefined && body.maxTokens >= body.contextWindow) {
+    return 'Max tokens должен быть меньше Context window.';
+  }
   if (body.ragId !== undefined &&
       (typeof body.ragId !== 'string' || !body.ragId.trim() || body.ragId.length > 100)) {
     return 'Выбранный RAG задан некорректно.';
@@ -406,8 +419,8 @@ export function validateChatInput(body) {
   }
   if (!['ollama', 'deepseek'].includes(body.provider)) return 'Указан неподдерживаемый провайдер.';
   if (typeof body.model !== 'string' || !supportedModels.has(body.model)) return 'Указана неподдерживаемая модель.';
-  if (body.provider === 'ollama' && body.model !== 'local-gigachat') return 'Модель не соответствует провайдеру.';
-  if (body.provider === 'deepseek' && body.model === 'local-gigachat') return 'Модель не соответствует провайдеру.';
+  if (body.provider === 'ollama' && !localModels.has(body.model)) return 'Модель не соответствует провайдеру.';
+  if (body.provider === 'deepseek' && localModels.has(body.model)) return 'Модель не соответствует провайдеру.';
   if (typeof body.systemPrompt !== 'string' || !body.systemPrompt.trim()) return 'Системный промт не должен быть пустым.';
   if (body.systemPrompt.length > 12000) return 'Системный промт не должен превышать 12000 символов.';
   if (!Array.isArray(body.messages) || body.messages.length === 0) return 'История сообщений не должна быть пустой.';
@@ -567,7 +580,7 @@ async function chatWithMcp(body, messages, provider, openMcp, signal, ragStore, 
     for (let turn = 0; turn < 8; turn++) {
       if (signal.aborted) throw new Error('Запрос отменён.');
       const result = await provider.completeWithTools(messages,
-        {model: body.model, tools, signal});
+        {model: body.model, tools, signal, temperature: body.temperature, maxTokens: body.maxTokens, contextWindow: body.contextWindow});
       promptTokens += result.usage?.prompt_tokens ?? 0;
       completionTokens += result.usage?.completion_tokens ?? 0;
       const calls = result.message.tool_calls ?? [];

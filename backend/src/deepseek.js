@@ -36,14 +36,14 @@ export function calculateDeepSeekCost(model, usage, date = new Date()) {
 
 export function createDeepSeekClient({apiKey, apiUrl, fetchImpl = fetch}) {
   return {
-    async completeWithTools(messages, {model, tools, signal}) {
+    async completeWithTools(messages, {model, tools, signal, temperature = 0.7, maxTokens}) {
       ensureApiKey(apiKey);
       let response;
       try {
         response = await fetchImpl(apiUrl, {
           method: 'POST',
           headers: {'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}`},
-          body: JSON.stringify({model, messages, tools, stream: false}),
+          body: JSON.stringify({model, messages, tools, temperature, ...(maxTokens !== undefined ? {max_tokens: maxTokens} : {}), stream: false}),
           signal: signal ?? AbortSignal.timeout(180000),
         });
       } catch {
@@ -55,7 +55,7 @@ export function createDeepSeekClient({apiKey, apiUrl, fetchImpl = fetch}) {
       if (!message) throw new UpstreamError('DeepSeek вернул некорректный ответ.');
       return {message, usage: payload.usage};
     },
-    async generate(messages, {model, temperature = 0.7, signal} = {}) {
+    async generate(messages, {model, temperature = 0.7, maxTokens, signal} = {}) {
       ensureApiKey(apiKey);
       const startedAt = Date.now();
       let response;
@@ -63,7 +63,7 @@ export function createDeepSeekClient({apiKey, apiUrl, fetchImpl = fetch}) {
         response = await fetchImpl(apiUrl, {
           method: 'POST',
           headers: {'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}`},
-          body: JSON.stringify({model, messages, temperature, stream: false}),
+          body: JSON.stringify({model, messages, temperature, ...(maxTokens !== undefined ? {max_tokens: maxTokens} : {}), stream: false}),
           signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(180000)]) : AbortSignal.timeout(180000),
         });
       } catch (error) {
@@ -91,7 +91,7 @@ export function createDeepSeekClient({apiKey, apiUrl, fetchImpl = fetch}) {
         },
       };
     },
-    async *generateStream(messages, {model, temperature = 0.7, signal} = {}) {
+    async *generateStream(messages, {model, temperature = 0.7, maxTokens, signal} = {}) {
       ensureApiKey(apiKey);
       const timeout = timeoutSignal(signal);
       try {
@@ -102,6 +102,7 @@ export function createDeepSeekClient({apiKey, apiUrl, fetchImpl = fetch}) {
             model,
             messages,
             temperature,
+            ...(maxTokens !== undefined ? {max_tokens: maxTokens} : {}),
             stream: true,
             stream_options: {include_usage: true},
           }),

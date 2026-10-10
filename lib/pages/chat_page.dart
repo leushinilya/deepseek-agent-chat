@@ -161,6 +161,9 @@ class _ChatPageState extends State<ChatPage> {
       LlmRequest(
           agent: agent,
           messages: contextChat.contextMessages,
+          temperature: contextChat.temperature,
+          maxTokens: contextChat.maxTokens,
+          contextWindow: contextChat.contextWindow,
           summary: contextChat.contextStrategy == ContextStrategy.compression
               ? contextChat.contextSummary
               : '',
@@ -255,6 +258,7 @@ class _ChatPageState extends State<ChatPage> {
       _compressing = true;
       _error = null;
     });
+    _scrollToEnd();
     final updater = FactsUpdater(widget.repository, widget.provider);
     _factsUpdater = updater;
     try {
@@ -358,7 +362,9 @@ class _ChatPageState extends State<ChatPage> {
           final periodicGenerating =
               widget.repository.isChatScheduleGenerating(chat.id);
           final generating = _generating || periodicGenerating;
-          final contextLimit = agent.model.contextWindowTokens;
+          final contextLimit = agent.model.providerId == 'ollama'
+              ? chat.contextWindow
+              : agent.model.contextWindowTokens;
           final contextProgress =
               (totalTokens / contextLimit).clamp(0.0, 1.0).toDouble();
           final wideHeader = MediaQuery.sizeOf(context).width >= 1000;
@@ -469,7 +475,7 @@ class _ChatPageState extends State<ChatPage> {
                     Expanded(
                       flex: 2,
                       child: SizedBox(
-                        height: 96,
+                        height: 64,
                         child: _contextSettings(chat),
                       ),
                     ),
@@ -479,7 +485,7 @@ class _ChatPageState extends State<ChatPage> {
               bottom: wideHeader
                   ? null
                   : PreferredSize(
-                      preferredSize: const Size.fromHeight(112),
+                      preferredSize: const Size.fromHeight(80),
                       child: Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 16),
                         child: SizedBox(
@@ -859,98 +865,20 @@ class _ChatPageState extends State<ChatPage> {
       );
 
   Widget _contextSettings(AgentChat chat) {
-    String? validate(String? _) {
-      final max = int.tryParse(_maxController.text);
-      final min = int.tryParse(_minController.text);
-      return max == null || min == null || min < 1 || min >= max
-          ? 'Нужно: 1 ≤ min < max'
-          : null;
-    }
-
-    void save(String _) {
-      if (!(_compressionForm.currentState?.validate() ?? false)) return;
-      widget.repository.updateCompressionSettings(chat.id,
-          enabled: chat.compressionEnabled,
-          max: int.parse(_maxController.text),
-          min: int.parse(_minController.text));
-    }
-
     final running = widget.repository.isChatScheduleRunning(chat.id);
     final periodic = chat.isPeriodic;
     return DefaultTextStyle.merge(
       style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w400),
       child: Form(
-        key: _compressionForm,
         child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           Expanded(
-              child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                const Padding(
-                    padding: EdgeInsets.only(top: 4, bottom: 2),
-                    child: Text('Стратегия')),
-                DropdownButtonHideUnderline(
-                  child: DropdownButton<ContextStrategy>(
-                    key: const Key('contextStrategyDropdown'),
-                    value: chat.contextStrategy,
-                    isExpanded: true,
-                    isDense: true,
-                    items: ContextStrategy.values
-                        .map((strategy) => DropdownMenuItem(
-                              value: strategy,
-                              child: Text(_strategyTitle(strategy),
-                                  overflow: TextOverflow.ellipsis),
-                            ))
-                        .toList(),
-                    onChanged: _isGenerating || periodic
-                        ? null
-                        : (strategy) {
-                            if (strategy != null) {
-                              unawaited(_selectContextStrategy(chat, strategy));
-                            }
-                          },
-                  ),
-                ),
-                if (!periodic &&
-                    chat.contextStrategy == ContextStrategy.compression)
-                  Row(children: [
-                    Expanded(
-                        child: _numberField(
-                            key: const Key('compressionMaxField'),
-                            controller: _maxController,
-                            label: 'max',
-                            enabled: chat.compressionEnabled && !_isGenerating,
-                            validator: validate,
-                            onChanged: save)),
-                    const SizedBox(width: 6),
-                    Expanded(
-                        child: _numberField(
-                            key: const Key('compressionMinField'),
-                            controller: _minController,
-                            label: 'min',
-                            enabled: chat.compressionEnabled && !_isGenerating,
-                            validator: validate,
-                            onChanged: save)),
-                  ])
-                else if (chat.contextStrategy ==
-                        ContextStrategy.slidingWindow ||
-                    (!periodic &&
-                        chat.contextStrategy == ContextStrategy.stickyFacts))
-                  _numberField(
-                      key: const Key('contextWindowSizeField'),
-                      controller: _windowController,
-                      label: 'Последние N',
-                      enabled: !periodic && !_isGenerating,
-                      onChanged: (_) {
-                        final value = int.tryParse(_windowController.text);
-                        if (value != null && value >= 1 && value <= 200) {
-                          widget.repository.updateWindowSize(chat.id, value);
-                        }
-                      })
-                else if (!periodic &&
-                    chat.contextStrategy == ContextStrategy.branching)
-                  _branchControls(chat),
-              ])),
+              child: Center(
+                  child: FilledButton.tonalIcon(
+            key: const Key('chatSettingsButton'),
+            onPressed: _isGenerating ? null : () => _editChatSettings(chat),
+            icon: const Icon(Icons.settings_outlined),
+            label: const Text('Настройки чата'),
+          ))),
           const VerticalDivider(width: 20, indent: 4, endIndent: 4),
           Expanded(
               child: Row(children: [
@@ -1000,6 +928,226 @@ class _ChatPageState extends State<ChatPage> {
         ]),
       ),
     );
+  }
+
+  Widget _strategySettings(AgentChat chat) {
+    String? validate(String? _) {
+      final max = int.tryParse(_maxController.text);
+      final min = int.tryParse(_minController.text);
+      return max == null || min == null || min < 1 || min >= max
+          ? 'Нужно: 1 ≤ min < max'
+          : null;
+    }
+
+    void save(String _) {
+      if (!(_compressionForm.currentState?.validate() ?? false)) return;
+      widget.repository.updateCompressionSettings(chat.id,
+          enabled: chat.compressionEnabled,
+          max: int.parse(_maxController.text),
+          min: int.parse(_minController.text));
+    }
+
+    final periodic = chat.isPeriodic;
+    return Form(
+        key: _compressionForm,
+        child:
+            Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          const Padding(
+              padding: EdgeInsets.only(top: 4, bottom: 2),
+              child: Text('Стратегия сжатия')),
+          DropdownButtonHideUnderline(
+            child: DropdownButton<ContextStrategy>(
+              key: const Key('contextStrategyDropdown'),
+              value: chat.contextStrategy,
+              isExpanded: true,
+              isDense: true,
+              items: ContextStrategy.values
+                  .map((strategy) => DropdownMenuItem(
+                        value: strategy,
+                        child: Text(_strategyTitle(strategy),
+                            overflow: TextOverflow.ellipsis),
+                      ))
+                  .toList(),
+              onChanged: _isGenerating || periodic
+                  ? null
+                  : (strategy) {
+                      if (strategy != null) {
+                        unawaited(_selectContextStrategy(chat, strategy));
+                      }
+                    },
+            ),
+          ),
+          if (!periodic && chat.contextStrategy == ContextStrategy.compression)
+            Row(children: [
+              Expanded(
+                  child: _numberField(
+                      key: const Key('compressionMaxField'),
+                      controller: _maxController,
+                      label: 'max',
+                      enabled: chat.compressionEnabled && !_isGenerating,
+                      validator: validate,
+                      onChanged: save)),
+              const SizedBox(width: 6),
+              Expanded(
+                  child: _numberField(
+                      key: const Key('compressionMinField'),
+                      controller: _minController,
+                      label: 'min',
+                      enabled: chat.compressionEnabled && !_isGenerating,
+                      validator: validate,
+                      onChanged: save)),
+            ])
+          else if (chat.contextStrategy == ContextStrategy.slidingWindow ||
+              (!periodic &&
+                  chat.contextStrategy == ContextStrategy.stickyFacts))
+            _numberField(
+                key: const Key('contextWindowSizeField'),
+                controller: _windowController,
+                label: 'Последние N',
+                enabled: !periodic && !_isGenerating,
+                onChanged: (_) {
+                  final value = int.tryParse(_windowController.text);
+                  if (value != null && value >= 1 && value <= 200) {
+                    widget.repository.updateWindowSize(chat.id, value);
+                  }
+                })
+          else if (!periodic &&
+              chat.contextStrategy == ContextStrategy.branching)
+            _branchControls(chat),
+        ]));
+  }
+
+  Future<void> _editChatSettings(AgentChat initialChat) async {
+    final temperature =
+        TextEditingController(text: '${initialChat.temperature}');
+    final maxTokens = TextEditingController(text: '${initialChat.maxTokens}');
+    final contextWindow =
+        TextEditingController(text: '${initialChat.contextWindow}');
+    final form = GlobalKey<FormState>();
+    final task = widget.repository.taskById(initialChat.taskId);
+    final agent =
+        widget.repository.agentById(task?.agentId ?? initialChat.agentId);
+    final local = agent?.model.providerId == 'ollama';
+    if (!local) {
+      contextWindow.text =
+          '${agent?.model.contextWindowTokens ?? initialChat.contextWindow}';
+    }
+    final route = DialogRoute<void>(
+        context: context,
+        builder: (dialogContext) => AnimatedBuilder(
+            animation: widget.repository,
+            builder: (context, _) {
+              final chat =
+                  widget.repository.chatById(initialChat.id) ?? initialChat;
+              return AlertDialog(
+                title: const Text('Настройки чата'),
+                content: SizedBox(
+                    width: 480,
+                    child: SingleChildScrollView(
+                        child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                          _strategySettings(chat),
+                          const SizedBox(height: 8),
+                          const Text('Изменения стратегии применяются сразу.',
+                              style: TextStyle(
+                                  fontSize: 12, color: Color(0xFF667085))),
+                          const SizedBox(height: 20),
+                          Form(
+                              key: form,
+                              child: Column(children: [
+                                TextFormField(
+                                    key: const Key('chatTemperatureField'),
+                                    controller: temperature,
+                                    keyboardType:
+                                        const TextInputType.numberWithOptions(
+                                            decimal: true),
+                                    decoration: const InputDecoration(
+                                        labelText: 'Температура',
+                                        helperText: 'От 0 до 2'),
+                                    validator: (text) {
+                                      final value = double.tryParse(
+                                          (text ?? '').replaceAll(',', '.'));
+                                      return value == null ||
+                                              !value.isFinite ||
+                                              value < 0 ||
+                                              value > 2
+                                          ? 'Введите число от 0 до 2'
+                                          : null;
+                                    }),
+                                const SizedBox(height: 12),
+                                TextFormField(
+                                    key: const Key('chatMaxTokensField'),
+                                    controller: maxTokens,
+                                    keyboardType: TextInputType.number,
+                                    decoration: const InputDecoration(
+                                        labelText: 'Max tokens',
+                                        helperText:
+                                            'Максимальная длина ответа'),
+                                    validator: (text) {
+                                      final value = int.tryParse(text ?? '');
+                                      final window =
+                                          int.tryParse(contextWindow.text);
+                                      return value == null ||
+                                              value < 1 ||
+                                              value > 65536 ||
+                                              (local &&
+                                                  window != null &&
+                                                  value >= window)
+                                          ? 'От 1 до 65536, меньше Context window'
+                                          : null;
+                                    }),
+                                const SizedBox(height: 12),
+                                TextFormField(
+                                    key: const Key('chatContextWindowField'),
+                                    controller: contextWindow,
+                                    enabled: local,
+                                    keyboardType: TextInputType.number,
+                                    decoration: InputDecoration(
+                                        labelText: 'Context window',
+                                        helperText: local
+                                            ? 'Размер контекста в токенах: от 128 до 1000000'
+                                            : 'Определяется облачной моделью: ${agent?.model.contextWindowTokens}'),
+                                    validator: (text) {
+                                      final value = int.tryParse(text ?? '');
+                                      return local &&
+                                              (value == null ||
+                                                  value < 128 ||
+                                                  value > 1000000)
+                                          ? 'От 128 до 1000000'
+                                          : null;
+                                    }),
+                              ])),
+                        ]))),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(dialogContext),
+                      child: const Text('Закрыть')),
+                  FilledButton(
+                      key: const Key('saveChatSettingsButton'),
+                      onPressed: () {
+                        if (!form.currentState!.validate() ||
+                            !(_compressionForm.currentState?.validate() ??
+                                true)) {
+                          return;
+                        }
+                        widget.repository.updateChatGenerationSettings(chat.id,
+                            temperature: double.parse(
+                                temperature.text.replaceAll(',', '.')),
+                            maxTokens: int.parse(maxTokens.text),
+                            contextWindow: int.parse(contextWindow.text));
+                        Navigator.pop(dialogContext);
+                      },
+                      child: const Text('Сохранить'))
+                ],
+              );
+            }));
+    await Navigator.of(context).push(route);
+    await route.completed;
+    temperature.dispose();
+    maxTokens.dispose();
+    contextWindow.dispose();
   }
 
   String _scheduleUnitLabel(String unit) => switch (unit) {

@@ -21,6 +21,10 @@ if (!Number.isInteger(ollamaContextSize) || ollamaContextSize <= 0) {
 }
 const ollama = createOllamaClient({
   contextSize: ollamaContextSize,
+  models: {
+    'local-gigachat': process.env.LOCAL_MODEL || 'hf.co/ai-sage/GigaChat3.1-10B-A1.8B-GGUF:Q4_K_M',
+    'local-gigachat-q8': process.env.LOCAL_MODEL_Q8 || 'hf.co/ai-sage/GigaChat3.1-10B-A1.8B-GGUF:Q8_0',
+  },
   apiUrl: process.env.OLLAMA_API_URL || `${process.env.OLLAMA_BASE_URL || 'http://localhost:11434'}/api/chat`,
   model:
     process.env.LOCAL_MODEL ||
